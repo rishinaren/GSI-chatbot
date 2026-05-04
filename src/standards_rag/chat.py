@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from standards_rag.models import Citation
@@ -53,10 +54,12 @@ class StandardsRagEngine:
         *,
         top_k: int = 6,
         min_score: float = 0.01,
+        answer_rewriter: Callable[[str, str, list[Citation]], str] | None = None,
     ) -> None:
         self.store = store
         self.top_k = top_k
         self.min_score = min_score
+        self.answer_rewriter = answer_rewriter
         self._history: dict[str, list[_ConversationTurn]] = {}
 
     def ask(
@@ -126,7 +129,31 @@ class StandardsRagEngine:
         else:
             response = self._answer_direct(clean_question, results, unit_preference)
 
+        response = self._maybe_rewrite_answer(clean_question, response)
         return self._remember(conversation_id, clean_question, response)
+
+    def _maybe_rewrite_answer(self, question: str, response: ChatResponse) -> ChatResponse:
+        if not self.answer_rewriter:
+            return response
+        if response.unsupported or response.needs_clarification or not response.citations:
+            return response
+
+        try:
+            rewritten = self.answer_rewriter(response.answer, question, response.citations)
+        except Exception:
+            return response
+
+        if not rewritten.strip():
+            return response
+
+        return ChatResponse(
+            answer=rewritten.strip(),
+            citations=response.citations,
+            retrieved_documents=response.retrieved_documents,
+            unsupported=response.unsupported,
+            needs_clarification=response.needs_clarification,
+            follow_up_suggestions=response.follow_up_suggestions,
+        )
 
     def _answer_direct(
         self,

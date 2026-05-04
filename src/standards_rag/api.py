@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from standards_rag.chat import StandardsRagEngine
+from standards_rag.openai_answer import build_openai_answer_rewriter_from_env
 from standards_rag.pinecone_hybrid import attach_pinecone_index, pinecone_enabled_from_env
 from standards_rag.retrieval import InMemoryStandardsStore
 
@@ -26,7 +27,12 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         if pinecone_enabled_from_env():
             store = attach_pinecone_index(store)
 
-    engine = StandardsRagEngine(store)
+    try:
+        answer_rewriter = build_openai_answer_rewriter_from_env()
+    except Exception:
+        answer_rewriter = None
+
+    engine = StandardsRagEngine(store, answer_rewriter=answer_rewriter)
     app = FastAPI(title="Standards RAG Chatbot", version="0.1.0")
 
     @app.get("/health")

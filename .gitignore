@@ -10,3 +10,4 @@ build/
 *.egg-info/
 data/raw/
 data/index/
+documents/
