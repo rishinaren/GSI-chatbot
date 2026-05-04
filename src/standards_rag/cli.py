@@ -7,6 +7,7 @@ from pathlib import Path
 
 from standards_rag.chat import StandardsRagEngine
 from standards_rag.ingestion import load_document_from_pdf, load_document_from_text
+from standards_rag.openai_answer import build_openai_answer_rewriter_from_env
 from standards_rag.pinecone_hybrid import (
     PineconeHybridStore,
     attach_pinecone_index,
@@ -80,7 +81,13 @@ def _ask(index: Path, question: str, conversation_id: str, units: str | None, pi
     store = InMemoryStandardsStore.load_json(index)
     if pinecone or pinecone_enabled_from_env():
         store = attach_pinecone_index(store)
-    response = StandardsRagEngine(store).ask(
+
+    try:
+        answer_rewriter = build_openai_answer_rewriter_from_env()
+    except Exception:
+        answer_rewriter = None
+
+    response = StandardsRagEngine(store, answer_rewriter=answer_rewriter).ask(
         question,
         conversation_id=conversation_id,
         unit_preference=units,

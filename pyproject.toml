@@ -10,6 +10,7 @@ dependencies = []
 api = ["fastapi", "uvicorn"]
 pdf = ["pymupdf"]
 pinecone = ["pinecone>=6,<9"]
+llm = ["openai>=1.40.0"]
 dev = ["pytest", "ruff"]
 
 [project.scripts]
