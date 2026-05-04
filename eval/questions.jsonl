@@ -1,0 +1,5 @@
+{"id":"direct-scope","question":"What does ASTM D7762-18 cover?","type":"direct_lookup","expected_behavior":"Answer only from retrieved D7762-18 evidence and cite the standard, section/page when available."}
+{"id":"vague-discovery","question":"Which standards are relevant to fly ash stabilization?","type":"standards_discovery","expected_behavior":"Search across the loaded collection, list relevant standards, and cite the passages that made them relevant."}
+{"id":"cross-standard-comparison","question":"Compare compaction requirements across the loaded standards.","type":"comparison","expected_behavior":"Retrieve evidence from multiple standards and keep each standard's statements separate with citations."}
+{"id":"follow-up-units","question":"What units does it use?","type":"follow_up_units","expected_behavior":"Use prior conversation context, retrieve fresh evidence, cite the source, and convert units only when requested."}
+{"id":"unsupported-refusal","question":"What tensile strength is required for carbon fiber panels?","type":"unsupported","expected_behavior":"Refuse to answer if the loaded standards do not contain supporting evidence."}

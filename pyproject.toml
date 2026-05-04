@@ -1,0 +1,27 @@
+[project]
+name = "standards-rag"
+version = "0.1.0"
+description = "Citation-first RAG chatbot core for standards documents."
+requires-python = ">=3.11"
+readme = "README.md"
+authors = [{ name = "GSI" }]
+dependencies = []
+
+[project.optional-dependencies]
+api = ["fastapi", "uvicorn"]
+pdf = ["pymupdf"]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+standards-rag = "standards_rag.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
