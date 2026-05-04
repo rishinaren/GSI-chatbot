@@ -3,13 +3,13 @@ name = "standards-rag"
 version = "0.1.0"
 description = "Citation-first RAG chatbot core for standards documents."
 requires-python = ">=3.11"
-readme = "README.md"
 authors = [{ name = "GSI" }]
 dependencies = []
 
 [project.optional-dependencies]
 api = ["fastapi", "uvicorn"]
 pdf = ["pymupdf"]
+pinecone = ["pinecone>=6,<9"]
 dev = ["pytest", "ruff"]
 
 [project.scripts]
