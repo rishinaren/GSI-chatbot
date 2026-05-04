@@ -12,6 +12,15 @@ from standards_rag.retrieval import InMemoryStandardsStore, SearchResult, _token
 _DEFAULT_EMBED_MODEL = "llama-text-embed-v2"
 
 
+def normalize_index_host(host: str) -> str:
+    cleaned = host.strip()
+    if cleaned.startswith("https://"):
+        cleaned = cleaned[len("https://") :]
+    if cleaned.startswith("http://"):
+        cleaned = cleaned[len("http://") :]
+    return cleaned.rstrip("/")
+
+
 @dataclass(frozen=True)
 class PineconeConfig:
     api_key: str
@@ -211,13 +220,13 @@ class PineconeHybridStore(InMemoryStandardsStore):
     def _connect_index(client: object, index_name: str):
         index_host = os.getenv("PINECONE_INDEX_HOST", "").strip()
         if index_host:
-            return client.Index(host=index_host)
+            return client.Index(host=normalize_index_host(index_host))
 
         describe = client.describe_index(name=index_name)
         host = getattr(describe, "host", None)
         if not host:
             raise RuntimeError("Could not resolve Pinecone index host. Set PINECONE_INDEX_HOST.")
-        return client.Index(host=host)
+        return client.Index(host=normalize_index_host(str(host)))
 
 
 def _require_pinecone():
