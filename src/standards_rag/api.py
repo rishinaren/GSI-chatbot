@@ -15,6 +15,7 @@ from standards_rag.retrieval import InMemoryStandardsStore
 def create_app(store: InMemoryStandardsStore | None = None) -> Any:
     try:
         from fastapi import FastAPI, HTTPException
+        from fastapi.middleware.cors import CORSMiddleware
     except ImportError as exc:
         raise RuntimeError("Install the optional 'api' dependencies to serve the API.") from exc
 
@@ -34,6 +35,13 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
 
     engine = StandardsRagEngine(store, answer_rewriter=answer_rewriter)
     app = FastAPI(title="Standards RAG Chatbot", version="0.1.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health")
     def health() -> dict[str, object]:
