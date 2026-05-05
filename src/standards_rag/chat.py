@@ -443,17 +443,22 @@ def _is_find_question(question: str) -> bool:
 
 def _is_context_meaning_question(question: str, results: list[SearchResult]) -> bool:
     lowered = question.lower()
-    markers = [
-        "meaning",
-        "meanings",
-        "mean",
-        "means",
+
+    # Only trigger on explicit phrases that genuinely ask about definitions/contexts
+    # across multiple standards. A single-letter variable alone is NOT enough.
+    explicit_markers = [
         "in different contexts",
-        "what should be done",
+        "across standards",
+        "different meanings",
+        "multiple meanings",
+        "how does it differ",
+        "how do they differ",
     ]
-    docs = {result.document.document_id for result in results[:5]}
-    has_single_letter_variable = bool(re.search(r"\b[a-zA-Z]\b", question))
-    return len(docs) >= 2 and (any(marker in lowered for marker in markers) or has_single_letter_variable)
+    if any(marker in lowered for marker in explicit_markers):
+        docs = {r.document.document_id for r in results[:6]}
+        return len(docs) >= 2
+
+    return False
 
 
 def _looks_like_follow_up(question: str) -> bool:
