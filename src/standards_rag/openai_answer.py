@@ -47,6 +47,8 @@ def build_openai_answer_rewriter_from_env() -> Callable[[str, str, list[Citation
             "- If the evidence is insufficient, say what is missing.\n"
             "- Do not introduce requirements, numbers, units, tests, or clauses not present in Evidence.\n"
             "- Preserve citation markers like [1], [2] when referring to evidence.\n"
+            "- If the draft answer says meanings/usages are context-dependent, keep that explicit framing.\n"
+            "- Keep per-context bullet points when they are present in the draft.\n"
             "- End with a 'Sources:' section listing the same citations in the same order.\n"
         )
 
