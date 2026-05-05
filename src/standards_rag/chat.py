@@ -124,6 +124,8 @@ class StandardsRagEngine:
 
         if _is_compare_question(clean_question):
             response = self._answer_comparison(clean_question, results, unit_preference)
+        elif _is_context_meaning_question(clean_question, results):
+            response = self._answer_context_meanings(clean_question, results, unit_preference)
         elif _is_find_question(clean_question):
             response = self._answer_find(clean_question, results)
         else:
@@ -136,6 +138,8 @@ class StandardsRagEngine:
         if not self.answer_rewriter:
             return response
         if response.unsupported or response.needs_clarification or not response.citations:
+            return response
+        if response.answer.startswith("There are multiple context-dependent meanings/usages"):
             return response
 
         try:
@@ -260,6 +264,66 @@ class StandardsRagEngine:
             ],
         )
 
+    def _answer_context_meanings(
+        self,
+        question: str,
+        results: list[SearchResult],
+        unit_preference: str | None,
+    ) -> ChatResponse:
+        focus = _focus_term(question)
+        filtered_results = _results_for_focus_term(results, focus)
+        if len({result.document.document_id for result in filtered_results}) >= 2:
+            results = filtered_results
+
+        grouped: dict[str, list[SearchResult]] = {}
+        for result in results:
+            grouped.setdefault(result.document.document_id, []).append(result)
+
+        bullet_lines: list[str] = []
+        cited_results: list[SearchResult] = []
+        for group_results in grouped.values():
+            best = max(
+                group_results,
+                key=lambda item: _question_sentence_overlap(question, _evidence_sentence(item)),
+            )
+            overlap = _question_sentence_overlap(question, _evidence_sentence(best))
+            if overlap < 2:
+                continue
+            cited_results.append(best)
+            sentence = _evidence_sentence(best)
+            bullet_lines.append(f"- {best.document.standard_id}: {sentence}")
+            if len(bullet_lines) == 4:
+                break
+
+        if len(cited_results) < 2:
+            fallback = list(grouped.values())[:2]
+            cited_results = [group[0] for group in fallback]
+            bullet_lines = [
+                f"- {result.document.standard_id}: {_evidence_sentence(result)}"
+                for result in cited_results
+            ]
+
+        citations = _citations_from_results(cited_results)
+        numbered_lines = [f"{line} [{index}]" for index, line in enumerate(bullet_lines, start=1)]
+        answer = (
+            f"There are multiple context-dependent meanings/usages for `{focus}` in the loaded standards.\n\n"
+            "Here are the different contexts and what each standard says:\n\n"
+            + "\n".join(numbered_lines)
+        )
+        unit_note = _unit_note(cited_results, unit_preference)
+        if unit_note:
+            answer += f"\n\nUnit note: {unit_note}"
+        answer += "\n\nSources:\n" + _format_sources(citations)
+        return ChatResponse(
+            answer=answer,
+            citations=citations,
+            retrieved_documents=_document_labels(results),
+            follow_up_suggestions=[
+                "Ask me to focus on one of these standards only.",
+                "Ask which context applies best for your specific test setup.",
+            ],
+        )
+
     def _contextual_query(
         self, question: str, conversation_id: str
     ) -> tuple[str, set[str] | None]:
@@ -377,6 +441,21 @@ def _is_find_question(question: str) -> bool:
     return any(phrase in lowered for phrase in ["find", "which standard", "what standard", "relevant"])
 
 
+def _is_context_meaning_question(question: str, results: list[SearchResult]) -> bool:
+    lowered = question.lower()
+    markers = [
+        "meaning",
+        "meanings",
+        "mean",
+        "means",
+        "in different contexts",
+        "what should be done",
+    ]
+    docs = {result.document.document_id for result in results[:5]}
+    has_single_letter_variable = bool(re.search(r"\b[a-zA-Z]\b", question))
+    return len(docs) >= 2 and (any(marker in lowered for marker in markers) or has_single_letter_variable)
+
+
 def _looks_like_follow_up(question: str) -> bool:
     lowered = question.lower()
     return any(
@@ -393,6 +472,52 @@ def _looks_like_follow_up(question: str) -> bool:
             "there",
         ]
     )
+
+
+def _focus_term(question: str) -> str:
+    quoted = re.search(r"['\"]([^'\"]{1,40})['\"]", question)
+    if quoted:
+        return quoted.group(1)
+    variable = re.search(
+        r"\bvariable\s+([A-Za-z])(?:\b|[_^]|\d)",
+        question,
+        re.IGNORECASE,
+    )
+    if variable:
+        return variable.group(1)
+    of_var = re.search(r"\bof\s+([a-zA-Z])\b", question, re.IGNORECASE)
+    if of_var:
+        return of_var.group(1)
+    single_letters = re.findall(r"\b([a-zA-Z])\b", question)
+    for letter in single_letters:
+        if letter.lower() not in {"s", "t", "m", "d", "a"}:
+            return letter
+    terms = [token for token in re.findall(r"[a-zA-Z]{3,}", question.lower())]
+    return terms[0] if terms else "the term"
+
+
+def _results_for_focus_term(results: list[SearchResult], focus: str) -> list[SearchResult]:
+    lowered_focus = focus.lower()
+    if lowered_focus == "the term":
+        return results
+    filtered = []
+    for result in results:
+        sentence = _evidence_sentence(result).lower()
+        text = result.chunk.text.lower()
+        if lowered_focus in sentence or lowered_focus in text:
+            filtered.append(result)
+    return filtered
+
+
+def _question_sentence_overlap(question: str, sentence: str) -> int:
+    stop = {"the", "for", "and", "with", "that", "this", "what", "when", "where", "there", "should"}
+    q_terms = {
+        token
+        for token in re.findall(r"[a-zA-Z]{3,}", question.lower())
+        if token not in stop
+    }
+    s_terms = set(re.findall(r"[a-zA-Z]{3,}", sentence.lower()))
+    return len(q_terms & s_terms)
 
 
 def _unit_note(results: list[SearchResult], unit_preference: str | None) -> str | None:
