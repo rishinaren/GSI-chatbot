@@ -13,6 +13,33 @@ const starterQuestions = [
   "Which standard is relevant for transmissivity?",
 ];
 
+/**
+ * Models often emit math as plain parentheses or \(...\) instead of $...$.
+ * remark-math + KaTeX need explicit math delimiters.
+ */
+function normalizeAssistantContent(text) {
+  let out = text;
+
+  out = out.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => `$${inner.trim()}$`);
+  out = out.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => `$$\n${inner.trim()}\n$$`);
+
+  const latexHint = /\\[a-zA-Z]+|\\\(|\\\)|\\\[|\\\]|\^[_\{]|\^[_0-9A-Za-z]|_[\{0-9A-Za-z]/;
+
+  out = out.replace(/\(\s*([A-Za-z](?:_\{[^}]+\}|_[A-Za-z0-9]+)?)\s*\)/g, (_, symbol) => `$${symbol}$`);
+
+  out = out.replace(/\(\s*([^()]{0,240}?)\s*\)/g, (match, inner) => {
+    if (!latexHint.test(inner)) {
+      return match;
+    }
+    if (inner.includes("$")) {
+      return match;
+    }
+    return `$${inner.trim()}$`;
+  });
+
+  return out;
+}
+
 function App() {
   const [messages, setMessages] = useState([
     {
@@ -134,7 +161,7 @@ function App() {
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                   >
-                    {message.text}
+                    {normalizeAssistantContent(message.text)}
                   </ReactMarkdown>
                 </div>
               ) : (
