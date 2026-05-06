@@ -7,12 +7,6 @@ import "katex/dist/katex.min.css";
 
 const conversationId = crypto.randomUUID();
 
-const starterQuestions = [
-  "What is ASTM D5321 about?",
-  "Compare D5321 and D6241.",
-  "Which standard is relevant for transmissivity?",
-];
-
 /**
  * Models often emit math as plain parentheses or \(...\) instead of $...$.
  * remark-math + KaTeX need explicit math delimiters.
@@ -40,6 +34,14 @@ function normalizeAssistantContent(text) {
   return out;
 }
 
+function SendIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+    </svg>
+  );
+}
+
 function App() {
   const [messages, setMessages] = useState([
     {
@@ -63,10 +65,7 @@ function App() {
 
     setError("");
     setIsLoading(true);
-    setMessages((current) => [
-      ...current,
-      { id: crypto.randomUUID(), role: "user", text: trimmed },
-    ]);
+    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: trimmed }]);
     setQuestion("");
 
     try {
@@ -107,111 +106,116 @@ function App() {
     void sendQuestion(question);
   }
 
+  function onKeyDown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendQuestion(question);
+    }
+  }
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <h1>GSI Chatbot</h1>
-        <p className="sidebar-copy">
-          Minimal local UI for testing the standards RAG pipeline.
-        </p>
-
-        <label className="control-group">
-          <span>Units</span>
-          <select value={unitPreference} onChange={(event) => setUnitPreference(event.target.value)}>
-            <option value="">Original standard units</option>
-            <option value="si">SI / Metric</option>
-            <option value="imperial">US / Imperial</option>
-          </select>
-        </label>
-
-        <div className="starter-list">
-          <span>Try one:</span>
-          {starterQuestions.map((starter) => (
-            <button
-              key={starter}
-              type="button"
-              className="starter-button"
-              onClick={() => void sendQuestion(starter)}
-              disabled={isLoading}
+    <div className="app-outer">
+      <div className="phone">
+        <header className="chat-header">
+          <h1>GSI Chatbot</h1>
+          <p className="chat-header-sub">Standards Q&amp;A — answers from your ingested index</p>
+          <div className="header-tools">
+            <label htmlFor="units">Units</label>
+            <select
+              id="units"
+              value={unitPreference}
+              onChange={(event) => setUnitPreference(event.target.value)}
             >
-              {starter}
-            </button>
-          ))}
-        </div>
-      </aside>
-
-      <main className="chat-panel">
-        <div className="chat-header">
-          <div>
-            <h2>Standards Q&A</h2>
-            <p>Answers come from your ingested standards index.</p>
+              <option value="">As in standard</option>
+              <option value="si">SI / metric</option>
+              <option value="imperial">US / imperial</option>
+            </select>
           </div>
-          <span className={`status-pill ${isLoading ? "busy" : "ready"}`}>
-            {isLoading ? "Thinking..." : "Ready"}
-          </span>
-        </div>
+        </header>
 
-        <div className="message-list">
+        <div className="message-scroll">
           {messages.map((message) => (
-            <article key={message.id} className={`message ${message.role}`}>
-              <div className="message-role">{message.role === "assistant" ? "Assistant" : "You"}</div>
-              {message.role === "assistant" ? (
-                <div className="message-body markdown-body">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
-                  >
-                    {normalizeAssistantContent(message.text)}
-                  </ReactMarkdown>
-                </div>
-              ) : (
-                <pre className="message-text">{message.text}</pre>
-              )}
+            <div key={message.id} className={`msg-row ${message.role}`}>
+              <div className={`avatar ${message.role === "user" ? "user" : ""}`} aria-hidden>
+                {message.role === "user" ? "You" : "AI"}
+              </div>
+              <div className={`bubble ${message.role === "user" ? "user" : "bot"}`}>
+                {message.role === "assistant" ? (
+                  <div className="markdown-body">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm, remarkMath]}
+                      rehypePlugins={[rehypeKatex]}
+                    >
+                      {normalizeAssistantContent(message.text)}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <p className="message-text-plain">{message.text}</p>
+                )}
 
-              {message.retrievedDocuments?.length > 0 && (
-                <div className="meta-block">
-                  <div className="meta-title">Retrieved documents</div>
-                  <ul>
-                    {message.retrievedDocuments.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                {message.retrievedDocuments?.length > 0 && (
+                  <div className="meta-block">
+                    <div className="meta-title">Retrieved documents</div>
+                    <ul>
+                      {message.retrievedDocuments.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
-              {message.citations?.length > 0 && (
-                <div className="meta-block">
-                  <div className="meta-title">Citations</div>
-                  <ul>
-                    {message.citations.map((citation) => (
-                      <li key={citation.chunk_id}>
-                        <strong>{citation.standard_id}</strong>
-                        {citation.section ? `, Section ${citation.section}` : ""}
-                        {citation.page_start ? `, page ${citation.page_start}` : ""}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </article>
+                {message.citations?.length > 0 && (
+                  <div className="meta-block">
+                    <div className="meta-title">Citations</div>
+                    <ul>
+                      {message.citations.map((citation) => (
+                        <li key={citation.chunk_id}>
+                          <strong>{citation.standard_id}</strong>
+                          {citation.section ? `, Section ${citation.section}` : ""}
+                          {citation.page_start ? `, page ${citation.page_start}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
           ))}
+
+          {isLoading && (
+            <div className="typing-row" aria-live="polite" aria-busy="true">
+              <div className="avatar" aria-hidden>
+                AI
+              </div>
+              <div className="typing-dots">
+                <span />
+                <span />
+                <span />
+              </div>
+            </div>
+          )}
         </div>
 
-        <form className="composer" onSubmit={onSubmit}>
-          <textarea
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            placeholder="Ask about a standard, compare two methods, or ask a follow-up..."
-            rows={4}
-          />
-          <div className="composer-footer">
-            {error ? <span className="error-text">{error}</span> : <span className="hint-text">FastAPI backend should be running on port 8000.</span>}
-            <button type="submit" disabled={!canSubmit}>
-              Send
+        <div className="composer-wrap">
+          {error ? <div className="composer-error">{error}</div> : null}
+          <form className="composer-inner" onSubmit={onSubmit}>
+            <span className="composer-icon" aria-hidden>
+              &#9786;
+            </span>
+            <textarea
+              className="composer-input"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Type here..."
+              rows={1}
+            />
+            <button type="submit" className="send-btn" disabled={!canSubmit} aria-label="Send">
+              <SendIcon />
             </button>
-          </div>
-        </form>
-      </main>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }
