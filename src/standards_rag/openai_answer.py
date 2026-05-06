@@ -49,6 +49,11 @@ def build_openai_answer_rewriter_from_env() -> Callable[[str, str, list[Citation
             "- Preserve citation markers like [1], [2] when referring to evidence.\n"
             "- If the draft answer says meanings/usages are context-dependent, keep that explicit framing.\n"
             "- Keep per-context bullet points when they are present in the draft.\n"
+            "- For mathematical expressions, use LaTeX inside Markdown math delimiters:\n"
+            "  - Inline: $...$ (example: $v$, $A$, $n = \\left(\\frac{t_v}{A}\\right)^2$)\n"
+            "  - Display (standalone equation lines): $$...$$\n"
+            "- Do not wrap math in plain parentheses like ( v ) or ( n = \\frac{a}{b} ); use $...$ instead.\n"
+            "- Do not rearrange equations unless the rearrangement is explicitly supported by the cited evidence text.\n"
             "- End with a 'Sources:' section listing the same citations in the same order.\n"
         )
 
