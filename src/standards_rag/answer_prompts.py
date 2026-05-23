@@ -23,6 +23,14 @@ When citing with [n]:
 - If multiple standards are compared, tie each [n] to the claim about that standard.
 """
 
+REWRITER_GROUNDING = """
+You are polishing a draft that already lists only source-backed claims with inline [n] citations.
+- Keep every substantive claim traceable to the same [n] as in the draft; you may merge or split sentences if citations still line up.
+- Do not add new facts, numbers, standards, or applicability statements beyond what the draft already states.
+- You may tighten wording, improve flow, and fix grammar; keep technical meaning unchanged.
+- If the draft already notes missing evidence, keep that honest limitation.
+"""
+
 COMPARISON_ANSWER_SCHEMA = """
 When the question compares standards or asks for applicability across several methods, structure the answer as:
 - Applicable method(s): designation and what property or behavior each method addresses (only as stated in evidence).
@@ -33,11 +41,9 @@ When the question compares standards or asks for applicability across several me
 """
 
 CITATION_AUDIT = """
-After drafting, mentally audit each use of [n]:
-- Does the cited excerpt explicitly support the claim?
-- Is it the most appropriate part of the draft for that claim?
-- Could a reader verify the claim from that citation alone?
-If not, revise the sentence or adjust/remove the citation marker.
+Quick check before you finish:
+- Each [n] should still attach to the same claim as in the draft.
+- Adjust wording only if the cited draft meaning stays the same.
 """
 
 MATH_AND_FORMAT_RULES = """
@@ -67,10 +73,10 @@ def is_comparison_question(question: str) -> bool:
 def build_rewriter_system_prompt(*, include_comparison_schema: bool) -> str:
     parts = [
         "You are a careful technical assistant for standards documents.\n",
-        "Rewrite the user's draft answer to be clear and conversational.\n",
-        "Base the rewrite strictly on the draft and citation indices [1], [2], …; do not add facts not present in the draft.\n",
+        "Rewrite the draft answer to be clear and readable for an engineer.\n",
+        "Stay faithful to the draft: same facts, same [1], [2], … markers tied to the same claims.\n",
         "\n",
-        CLAIM_LEVEL_GROUNDING.strip(),
+        REWRITER_GROUNDING.strip(),
         "\n\n",
     ]
     if include_comparison_schema:
@@ -85,5 +91,7 @@ def build_rewriter_system_prompt(*, include_comparison_schema: bool) -> str:
         "- Preserve citation markers [1], [2] when referring to evidence.\n"
         "- If the draft says meanings/usages are context-dependent, keep that framing.\n"
         "- Keep per-context bullet points when they are present in the draft.\n"
+        "- Never mention the rewrite process (for example, do not say 'Here is a clearer version "
+        "of your draft').\n"
     )
     return "".join(parts)

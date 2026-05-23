@@ -20,6 +20,22 @@ REFERENCE_RE = re.compile(
     r"\bBS\s+(?:EN\s+)?\d+(?:[-:]\d+)*(?::\d{4})?\b",
     re.IGNORECASE,
 )
+SECTION_TYPE_HINTS: tuple[tuple[str, str], ...] = (
+    ("scope", "scope"),
+    ("summary of test method", "summary"),
+    ("significance and use", "significance"),
+    ("terminology", "terminology"),
+    ("definition", "terminology"),
+    ("referenced document", "referenced_documents"),
+    ("apparatus", "apparatus"),
+    ("sampling", "sampling"),
+    ("condition", "conditioning"),
+    ("procedure", "procedure"),
+    ("calculation", "calculation"),
+    ("report", "report"),
+    ("precision", "precision"),
+    ("bias", "precision"),
+)
 
 
 @dataclass(frozen=True)
@@ -133,12 +149,51 @@ def _section_major(section_id: str | None) -> str | None:
     return section_id.split(".", maxsplit=1)[0]
 
 
+def _section_type_from_section_number(section_id: str | None) -> str | None:
+    """Map ASTM major section numbers to canonical section type labels."""
+    major = _section_major(section_id)
+    by_major = {
+        "1": "scope",
+        "2": "referenced_documents",
+        "3": "terminology",
+        "4": "summary",
+        "5": "significance",
+        "6": "apparatus",
+        "7": "sampling",
+        "8": "sampling",
+        "9": "conditioning",
+        "10": "procedure",
+        "11": "calculation",
+        "12": "report",
+        "13": "precision",
+    }
+    return by_major.get(major)
+
+
+def _infer_section_type(
+    *,
+    section_id: str | None,
+    heading: str | None,
+    text: str,
+) -> str:
+    """Classify chunk intent so retrieval can prioritize applicability-defining sections."""
+    by_number = _section_type_from_section_number(section_id)
+    if by_number:
+        return by_number
+
+    haystack = f"{heading or ''}\n{text[:320]}".lower()
+    for token, label in SECTION_TYPE_HINTS:
+        if token in haystack:
+            return label
+    return "other"
+
+
 def chunk_pages(
     document: StandardDocument,
     pages: Iterable[PageText],
     *,
-    max_chars: int = 1400,
-    overlap_chars: int = 160,
+    max_chars: int = 900,
+    overlap_chars: int = 120,
 ) -> list[SourceChunk]:
     """Split page text into citation-ready chunks while preserving page and section anchors."""
 
@@ -150,13 +205,27 @@ def chunk_pages(
     current_heading: str | None = None
     active_section: str | None = None
     active_heading: str | None = None
+    paragraph_index = 0
 
     def flush() -> None:
         nonlocal current_parts, current_page_start, current_page_end, current_section, current_heading
+        nonlocal paragraph_index
         text = "\n\n".join(part.strip() for part in current_parts if part.strip()).strip()
         if not text:
             return
         order = len(chunks)
+        section_type = _infer_section_type(
+            section_id=current_section,
+            heading=current_heading,
+            text=text,
+        )
+        page_numbers = sorted(
+            {
+                current_page_start,
+                current_page_end,
+            }
+            - {None}
+        )
         chunks.append(
             SourceChunk(
                 chunk_id=(
@@ -170,8 +239,17 @@ def chunk_pages(
                 section=current_section,
                 heading=current_heading,
                 order=order,
+                metadata={
+                    "section_number": current_section,
+                    "section_title": current_heading,
+                    "section_type": section_type,
+                    "paragraph_index": paragraph_index,
+                    "page_numbers": page_numbers,
+                    "printed_page_label": _extract_printed_page_label(text),
+                },
             )
         )
+        paragraph_index += len(current_parts)
         overlap = text[-overlap_chars:] if overlap_chars and len(text) > overlap_chars else ""
         current_parts = [overlap] if overlap else []
         current_page_start = current_page_end
@@ -179,6 +257,14 @@ def chunk_pages(
         current_heading = active_heading
 
     for page in pages:
+        if current_page_end is not None and page.page_number != current_page_end and current_parts:
+            flush()
+        if current_page_start is None:
+            current_page_start = page.page_number
+            current_section = active_section
+            current_heading = active_heading
+        current_page_end = page.page_number
+
         paragraphs = _paragraphs(page.text)
         for paragraph in paragraphs:
             section, heading = _section_heading(paragraph)
@@ -193,16 +279,9 @@ def chunk_pages(
                     and _section_major(prev_active) != _section_major(active_section)
                 ):
                     flush()
-                    current_page_end = page.page_number
-            if current_page_start is None:
-                current_page_start = page.page_number
-                current_section = active_section
-                current_heading = active_heading
-            current_page_end = page.page_number
             projected_size = sum(len(part) for part in current_parts) + len(paragraph)
             if current_parts and projected_size > max_chars:
                 flush()
-                current_page_end = page.page_number
             current_parts.append(paragraph)
             if current_section is None:
                 current_section = active_section
@@ -210,6 +289,15 @@ def chunk_pages(
 
     flush()
     return chunks
+
+
+def _extract_printed_page_label(text: str) -> str | None:
+    """Best-effort printed page label from ASTM-style page headers/footers."""
+    for line in text.splitlines()[:4]:
+        match = re.search(r"\bpage\s+(\d+)\b", line, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
 
 
 def _paragraphs(text: str) -> list[str]:

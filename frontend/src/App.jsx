@@ -1,34 +1,32 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import ChatSidebar from "./components/ChatSidebar";
+import LoginPanel from "./components/LoginPanel";
+import {
+  createConversation,
+  deleteConversation,
+  getConversation,
+  listConversations,
+  sendChat,
+  withApiBase,
+} from "./api";
+import { loadAuthState, signOut } from "./auth";
 
-const conversationId = crypto.randomUUID();
-
-/**
- * Models often emit math as plain parentheses or \(...\) instead of $...$.
- * remark-math + KaTeX need explicit math delimiters.
- *
- * Important: do not wrap (...) in $...$ when the "(" belongs to \left( ... \right)
- * — that used to produce \left$...\right$ and break KaTeX.
- */
 const PAREN_NOT_AFTER_LATEX_OPENER = "(?<!\\\\(?:left|bigl|Bigl|biggl|Biggl|mleft))";
 
 function normalizeAssistantContent(text) {
   let out = text;
-
   out = out.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => `$${inner.trim()}$`);
   out = out.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => `$$\n${inner.trim()}\n$$`);
-
-  // Repair invalid \left$ ... \right$ (model typo or legacy normalization bug).
   out = out.replace(/\\left\s*\$([\s\S]*?)\\right\s*\$/g, (_, inner) => `\\left(${inner.trim()}\\right)`);
   out = out.replace(/\\left\s*\$([\s\S]*?)\\right\s*\)/g, (_, inner) => `\\left(${inner.trim()}\\right)`);
   out = out.replace(/\\right\s*\$(?=\s*\^)/g, "\\right)");
 
   const latexHint = /\\[a-zA-Z]+|\\\(|\\\)|\\\[|\\\]|\^[_\{]|\^[_0-9A-Za-z]|_[\{0-9A-Za-z]/;
-
   const singleSymbolParen = new RegExp(
     `${PAREN_NOT_AFTER_LATEX_OPENER}\\(\\s*([A-Za-z](?:_\\{[^}]+\\}|_[A-Za-z0-9]+)?)\\s*\\)`,
     "g",
@@ -40,15 +38,11 @@ function normalizeAssistantContent(text) {
     "g",
   );
   out = out.replace(genericParen, (match, inner) => {
-    if (!latexHint.test(inner)) {
-      return match;
-    }
-    if (inner.includes("$")) {
+    if (!latexHint.test(inner) || inner.includes("$")) {
       return match;
     }
     return `$${inner.trim()}$`;
   });
-
   return out;
 }
 
@@ -60,21 +54,104 @@ function SendIcon() {
   );
 }
 
+function welcomeMessage() {
+  return {
+    id: "welcome",
+    role: "assistant",
+    text: "Ask a standards question. I will answer from the ingested documents and cite the source pages I used.",
+    citations: [],
+  };
+}
+
+function messagesFromConversation(record) {
+  if (!record?.messages?.length) {
+    return [welcomeMessage()];
+  }
+  return record.messages.map((message, index) => ({
+    id: `${record.conversation_id}-${index}`,
+    role: message.role,
+    text: message.text,
+    citations: message.citations ?? [],
+  }));
+}
+
 function App() {
-  const [messages, setMessages] = useState([
-    {
-      id: "welcome",
-      role: "assistant",
-      text: "Ask a standards question. I will answer from the ingested documents and cite the source pages I used.",
-      citations: [],
-    },
-  ]);
+  const [authState, setAuthState] = useState({ loading: true, authRequired: false, isLoggedIn: true });
+  const [conversations, setConversations] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState(null);
+  const [messages, setMessages] = useState([welcomeMessage()]);
   const [question, setQuestion] = useState("");
   const [unitPreference, setUnitPreference] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [followUpSuggestions, setFollowUpSuggestions] = useState([]);
 
   const canSubmit = useMemo(() => question.trim().length > 0 && !isLoading, [question, isLoading]);
+
+  useEffect(() => {
+    void bootstrap();
+  }, []);
+
+  async function bootstrap() {
+    try {
+      const state = await loadAuthState();
+      setAuthState({ loading: false, ...state });
+      if (state.isLoggedIn) {
+        await refreshConversations();
+      }
+    } catch (bootstrapError) {
+      setAuthState({ loading: false, authRequired: false, isLoggedIn: true });
+      setError(bootstrapError instanceof Error ? bootstrapError.message : "Failed to initialize app.");
+    }
+  }
+
+  async function refreshConversations() {
+    const data = await listConversations();
+    setConversations(data.conversations ?? []);
+  }
+
+  async function handleSignedIn() {
+    const state = await loadAuthState();
+    setAuthState({ loading: false, ...state });
+    await refreshConversations();
+  }
+
+  async function handleNewChat() {
+    setError("");
+    const record = await createConversation({ unit_preference: unitPreference || null });
+    setActiveConversationId(record.conversation_id);
+    setMessages([welcomeMessage()]);
+    setFollowUpSuggestions([]);
+    await refreshConversations();
+  }
+
+  async function handleSelectConversation(conversationId) {
+    setError("");
+    setActiveConversationId(conversationId);
+    const record = await getConversation(conversationId);
+    setMessages(messagesFromConversation(record));
+    setUnitPreference(record.unit_preference || "");
+    setFollowUpSuggestions([]);
+  }
+
+  async function handleDeleteConversation(conversationId) {
+    await deleteConversation(conversationId);
+    if (conversationId === activeConversationId) {
+      setActiveConversationId(null);
+      setMessages([welcomeMessage()]);
+    }
+    await refreshConversations();
+  }
+
+  async function ensureConversationId() {
+    if (activeConversationId) {
+      return activeConversationId;
+    }
+    const record = await createConversation({ unit_preference: unitPreference || null });
+    setActiveConversationId(record.conversation_id);
+    await refreshConversations();
+    return record.conversation_id;
+  }
 
   async function sendQuestion(text) {
     const trimmed = text.trim();
@@ -82,25 +159,17 @@ function App() {
 
     setError("");
     setIsLoading(true);
+    setFollowUpSuggestions([]);
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: trimmed }]);
     setQuestion("");
 
     try {
-      const response = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: trimmed,
-          conversation_id: conversationId,
-          unit_preference: unitPreference || null,
-        }),
+      const conversationId = await ensureConversationId();
+      const data = await sendChat({
+        question: trimmed,
+        conversation_id: conversationId,
+        unit_preference: unitPreference || null,
       });
-
-      if (!response.ok) {
-        throw new Error(`Request failed with status ${response.status}`);
-      }
-
-      const data = await response.json();
       setMessages((current) => [
         ...current,
         {
@@ -108,8 +177,11 @@ function App() {
           role: "assistant",
           text: data.answer,
           citations: data.citations ?? [],
+          needsClarification: data.needs_clarification,
         },
       ]);
+      setFollowUpSuggestions(data.follow_up_suggestions ?? []);
+      await refreshConversations();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Something went wrong.");
     } finally {
@@ -129,9 +201,25 @@ function App() {
     }
   }
 
+  if (authState.loading) {
+    return <div className="app-loading">Loading...</div>;
+  }
+
+  if (authState.authRequired && !authState.isLoggedIn) {
+    return <LoginPanel onSignedIn={handleSignedIn} />;
+  }
+
   return (
-    <div className="app-outer">
-      <div className="phone">
+    <div className="app-shell">
+      <ChatSidebar
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        onSelect={handleSelectConversation}
+        onNewChat={handleNewChat}
+        onDelete={handleDeleteConversation}
+      />
+
+      <div className="app-main">
         <header className="chat-header">
           <div className="chat-header-inner">
             <div className="chat-header-titles">
@@ -149,113 +237,152 @@ function App() {
                 <option value="si">SI / metric</option>
                 <option value="imperial">US / imperial</option>
               </select>
+              {authState.configured ? (
+                <button type="button" className="sign-out-btn" onClick={() => { signOut(); window.location.reload(); }}>
+                  Sign out
+                </button>
+              ) : null}
             </div>
           </div>
         </header>
 
-        <div className="chat-body">
-          <div className="chat-content">
-            <div className="message-scroll">
-              {messages.map((message) => (
-                <div key={message.id} className={`msg-row ${message.role}`}>
-                  <div className={`avatar ${message.role === "user" ? "user" : ""}`} aria-hidden>
-                    {message.role === "user" ? "You" : "AI"}
-                  </div>
-                  <div className={`bubble ${message.role === "user" ? "user" : "bot"}`}>
-                    {message.role === "assistant" ? (
-                      <div className="markdown-body">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm, remarkMath]}
-                          rehypePlugins={[rehypeKatex]}
-                        >
-                          {normalizeAssistantContent(message.text)}
-                        </ReactMarkdown>
-                      </div>
-                    ) : (
-                      <p className="message-text-plain">{message.text}</p>
-                    )}
+        <ChatBody
+          messages={messages}
+          isLoading={isLoading}
+          error={error}
+          followUpSuggestions={followUpSuggestions}
+          question={question}
+          setQuestion={setQuestion}
+          canSubmit={canSubmit}
+          onSubmit={onSubmit}
+          onKeyDown={onKeyDown}
+          sendQuestion={sendQuestion}
+        />
+      </div>
+    </div>
+  );
+}
 
-                    {message.citations?.length > 0 && (
-                      <div className="meta-block">
-                        <div className="meta-title">Citations</div>
-                        <ul>
-                          {message.citations.map((citation) => {
-                            const pageSuffix =
-                              citation.page_start != null
-                                ? citation.page_end != null &&
-                                  citation.page_end !== citation.page_start
-                                  ? `, pages ${citation.page_start}-${citation.page_end}`
-                                  : `, page ${citation.page_start}`
-                                : "";
-                            const docLine = (
-                              <>
-                                <strong>{citation.standard_id}</strong>
-                                {", "}
-                                {citation.title}
-                              </>
-                            );
-                            return (
-                              <li key={citation.chunk_id}>
-                                {citation.pdf_url ? (
-                                  <a
-                                    className="doc-pdf-link"
-                                    href={citation.pdf_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                  >
-                                    {docLine}
-                                  </a>
-                                ) : (
-                                  docLine
-                                )}
-                                {citation.section ? `, Section ${citation.section}` : ""}
-                                {pageSuffix}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </div>
-                    )}
+function ChatBody({
+  messages,
+  isLoading,
+  error,
+  followUpSuggestions,
+  question,
+  setQuestion,
+  canSubmit,
+  onSubmit,
+  onKeyDown,
+  sendQuestion,
+}) {
+  return (
+    <div className="chat-body">
+      <div className="chat-content">
+        <div className="message-scroll">
+          {messages.map((message) => (
+            <div key={message.id} className={`msg-row ${message.role}`}>
+              <ChatAvatar role={message.role} />
+              <div className={`bubble ${message.role === "user" ? "user" : "bot"}`}>
+                {message.role === "assistant" ? (
+                  <div className="markdown-body">
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {normalizeAssistantContent(message.text)}
+                    </ReactMarkdown>
                   </div>
-                </div>
-              ))}
+                ) : (
+                  <p className="message-text-plain">{message.text}</p>
+                )}
 
-              {isLoading && (
-                <div className="typing-row" aria-live="polite" aria-busy="true">
-                  <div className="avatar" aria-hidden>
-                    AI
+                {message.citations?.length > 0 && (
+                  <div className="meta-block">
+                    <div className="meta-title">Citations</div>
+                    <ul>
+                      {message.citations.map((citation) => {
+                        const pageSuffix =
+                          citation.page_start != null
+                            ? citation.page_end != null && citation.page_end !== citation.page_start
+                              ? `, pages ${citation.page_start}-${citation.page_end}`
+                              : `, page ${citation.page_start}`
+                            : "";
+                        const docLine = (
+                          <>
+                            <strong>{citation.standard_id}</strong>
+                            {", "}
+                            {citation.title}
+                          </>
+                        );
+                        const pdfUrl = withApiBase(citation.pdf_url);
+                        return (
+                          <li key={citation.chunk_id}>
+                            {pdfUrl ? (
+                              <a className="doc-pdf-link" href={pdfUrl} target="_blank" rel="noopener noreferrer">
+                                {docLine}
+                              </a>
+                            ) : (
+                              docLine
+                            )}
+                            {citation.section ? `, Section ${citation.section}` : ""}
+                            {pageSuffix}
+                          </li>
+                        );
+                      })}
+                    </ul>
                   </div>
-                  <div className="typing-dots">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
+          ))}
 
-            <div className="composer-wrap">
-              {error ? <div className="composer-error">{error}</div> : null}
-              <form className="composer-inner" onSubmit={onSubmit}>
-                <span className="composer-icon" aria-hidden>
-                  &#9786;
-                </span>
-                <textarea
-                  className="composer-input"
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  onKeyDown={onKeyDown}
-                  placeholder="Type here..."
-                  rows={1}
-                />
-                <button type="submit" className="send-btn" disabled={!canSubmit} aria-label="Send">
-                  <SendIcon />
-                </button>
-              </form>
+          {isLoading && (
+            <div className="typing-row" aria-live="polite" aria-busy="true">
+              <ChatAvatar role="assistant" />
+              <div className="typing-dots">
+                <span />
+                <span />
+                <span />
+              </div>
             </div>
+          )}
+        </div>
+
+        {followUpSuggestions.length > 0 && (
+          <div className="follow-up-row">
+            {followUpSuggestions.map((suggestion) => (
+              <button key={suggestion} type="button" className="follow-up-chip" onClick={() => sendQuestion(suggestion)}>
+                {suggestion}
+              </button>
+            ))}
           </div>
+        )}
+
+        <div className="composer-wrap">
+          {error ? <div className="composer-error">{error}</div> : null}
+          <form className="composer-inner" onSubmit={onSubmit}>
+            <span className="composer-icon" aria-hidden>
+              &#9786;
+            </span>
+            <textarea
+              className="composer-input"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Type here..."
+              rows={1}
+            />
+            <button type="submit" className="send-btn" disabled={!canSubmit} aria-label="Send">
+              <SendIcon />
+            </button>
+          </form>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ChatAvatar({ role }) {
+  return (
+    <div className={`avatar ${role === "user" ? "user" : ""}`} aria-hidden>
+      {role === "user" ? "You" : "AI"}
     </div>
   );
 }

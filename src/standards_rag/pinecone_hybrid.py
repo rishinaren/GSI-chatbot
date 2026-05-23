@@ -7,7 +7,13 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from standards_rag.models import SourceChunk, StandardDocument
-from standards_rag.retrieval import InMemoryStandardsStore, SearchResult, section_intent_boost, _tokens
+from standards_rag.retrieval import (
+    InMemoryStandardsStore,
+    SearchResult,
+    rerank_results_for_citation,
+    section_intent_boost,
+    _tokens,
+)
 
 _DEFAULT_EMBED_MODEL = "llama-text-embed-v2"
 
@@ -106,7 +112,14 @@ class PineconeHybridStore(InMemoryStandardsStore):
                 "standard_id": document.standard_id,
                 "chunk_id": chunk.chunk_id,
                 "text_preview": chunk.text[:800],
+                "page_start": chunk.page_start,
+                "page_end": chunk.page_end,
+                "section": chunk.section,
+                "heading": (chunk.heading or "")[:120],
+                "section_type": str(chunk.metadata.get("section_type", "other")),
+                "document_type": document.document_type.value,
             }
+            metadata = {key: value for key, value in metadata.items() if value is not None}
             vectors.append({"id": chunk.chunk_id, "values": values, "metadata": metadata})
 
         for start in range(0, len(vectors), self.config.batch_size):
@@ -140,7 +153,12 @@ class PineconeHybridStore(InMemoryStandardsStore):
     ) -> list[SearchResult]:
         query_terms = _tokens(query)
         if not query_terms:
-            return []
+            return super().search_with_citation_rerank(
+                query,
+                top_k=top_k,
+                document_ids=document_ids,
+                min_score=min_score,
+            )
 
         query_vector = self._embed_query(query)
         pinecone_filter = None
@@ -175,28 +193,28 @@ class PineconeHybridStore(InMemoryStandardsStore):
                 fused_scores.append((fused, chunk_id))
 
         fused_scores.sort(key=lambda item: item[0], reverse=True)
-        if not fused_scores:
-            return super().search(
-                query,
-                top_k=top_k,
-                document_ids=document_ids,
-                min_score=max(min_score, 0.05),
-            )
-
-        results: list[SearchResult] = []
-        for score, chunk_id in fused_scores[:top_k]:
-            chunk = self.chunks[chunk_id]
-            document = self.documents[chunk.document_id]
-            matched_terms = tuple(sorted(set(query_terms) & set(_tokens(chunk.text))))
-            results.append(
-                SearchResult(
-                    chunk=chunk,
-                    document=document,
-                    score=round(score, 4),
-                    matched_terms=matched_terms,
+        if fused_scores:
+            candidates: list[SearchResult] = []
+            for score, chunk_id in fused_scores[: max(top_k * 4, 16)]:
+                chunk = self.chunks[chunk_id]
+                document = self.documents[chunk.document_id]
+                matched_terms = tuple(sorted(set(query_terms) & set(_tokens(chunk.text))))
+                candidates.append(
+                    SearchResult(
+                        chunk=chunk,
+                        document=document,
+                        score=round(score, 4),
+                        matched_terms=matched_terms,
+                    )
                 )
-            )
-        return results
+            return rerank_results_for_citation(query, candidates, top_k=top_k)
+
+        return super().search_with_citation_rerank(
+            query,
+            top_k=top_k,
+            document_ids=document_ids,
+            min_score=min_score,
+        )
 
     def _embed_passages(self, texts: list[str]) -> list[list[float]]:
         response = self._client.inference.embed(

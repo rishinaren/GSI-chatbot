@@ -112,12 +112,19 @@ class Citation:
             return f"pages {self.page_start}-{self.page_end}"
         return f"page {self.page_start}"
 
-    def format(self) -> str:
-        parts = [self.standard_id, self.title]
-        if self.section:
-            parts.append(f"Section {self.section}")
-        parts.append(self.page_label)
-        return ", ".join(parts)
-
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Citation":
+        return cls(
+            document_id=str(data.get("document_id", "")),
+            standard_id=str(data.get("standard_id", "")),
+            title=str(data.get("title", "")),
+            chunk_id=str(data.get("chunk_id", "")),
+            page_start=data.get("page_start"),
+            page_end=data.get("page_end"),
+            section=data.get("section"),
+            quote=data.get("quote"),
+            pdf_url=data.get("pdf_url"),
+        )

@@ -11,6 +11,8 @@ api = ["fastapi", "uvicorn"]
 pdf = ["pymupdf"]
 pinecone = ["pinecone>=6,<9"]
 llm = ["openai>=1.40.0"]
+auth = ["PyJWT[crypto]>=2.8.0"]
+aws = ["boto3>=1.34.0"]
 dev = ["pytest", "ruff"]
 
 [project.scripts]

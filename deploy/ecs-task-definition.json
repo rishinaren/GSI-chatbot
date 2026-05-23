@@ -1,0 +1,49 @@
+{
+  "family": "gsi-standards-rag-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/gsiStandardsRagTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "standards-rag-api",
+      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/gsi-standards-rag-api:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "AUTH_REQUIRED", "value": "1" },
+        { "name": "STANDARDS_INDEX_PATH", "value": "/data/index/standards-index.json" },
+        { "name": "STANDARDS_PDF_ROOT", "value": "/data/pdfs" }
+      ],
+      "secrets": [
+        { "name": "OPENAI_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:gsi/openai-api-key" },
+        { "name": "PINECONE_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:gsi/pinecone-api-key" },
+        { "name": "COGNITO_USER_POOL_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/gsi/cognito/user-pool-id" },
+        { "name": "COGNITO_APP_CLIENT_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/gsi/cognito/app-client-id" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/gsi-standards-rag-api",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 30
+      }
+    }
+  ]
+}

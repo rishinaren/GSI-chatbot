@@ -1,0 +1,5 @@
+{"id":"d4595-coverage","question":"What does ASTM D4595-24 cover?","expected_standard_id":"D4595-24","expected_section":null,"expected_page_start":null,"expected_keywords":["geotextile"],"must_refuse":false}
+{"id":"d5887-index-flux","question":"Which standard measures index flux through saturated geosynthetic clay liner specimens?","expected_standard_id":"D5887-23","expected_section":null,"expected_page_start":1,"expected_keywords":["index flux","saturated"],"must_refuse":false}
+{"id":"d6241-use","question":"What is D6241-22A used for?","expected_standard_id":"D6241-22A","expected_section":null,"expected_page_start":null,"expected_keywords":["puncture"],"must_refuse":false}
+{"id":"d4716-transmissivity","question":"What does ASTM D4716 measure?","expected_standard_id":"D4716-22","expected_section":null,"expected_page_start":null,"expected_keywords":["flow","transmissivity"],"must_refuse":false}
+{"id":"unsupported-exoplanet","question":"What is the recommended orbital period for exoplanet satellites?","expected_standard_id":null,"expected_section":null,"expected_page_start":null,"expected_keywords":[],"must_refuse":true}
