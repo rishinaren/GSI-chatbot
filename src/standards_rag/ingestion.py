@@ -127,6 +127,12 @@ def load_document_from_text(
     return document, chunk_pages(document, pages_from_text(text))
 
 
+def _section_major(section_id: str | None) -> str | None:
+    if not section_id:
+        return None
+    return section_id.split(".", maxsplit=1)[0]
+
+
 def chunk_pages(
     document: StandardDocument,
     pages: Iterable[PageText],
@@ -177,8 +183,17 @@ def chunk_pages(
         for paragraph in paragraphs:
             section, heading = _section_heading(paragraph)
             if section:
+                prev_active = active_section
                 active_section = section
                 active_heading = heading
+                if (
+                    current_parts
+                    and prev_active is not None
+                    and active_section is not None
+                    and _section_major(prev_active) != _section_major(active_section)
+                ):
+                    flush()
+                    current_page_end = page.page_number
             if current_page_start is None:
                 current_page_start = page.page_number
                 current_section = active_section
@@ -211,7 +226,32 @@ def _section_heading(paragraph: str) -> tuple[str | None, str | None]:
     return match.group(1), match.group(2).strip()
 
 
+def _standard_id_from_source_path(source_path: str | None) -> str | None:
+    """Return designation from filename when it starts with a standard-like token.
+
+    PDF text often lists *other* ASTM designations (references, related standards) before the
+    cover designation. The ingested file name is the reliable identity for the document.
+    """
+    if not source_path:
+        return None
+    stem = Path(source_path).stem.strip()
+    if not stem:
+        return None
+    head = re.split(r"[\s_]+", stem, maxsplit=1)[0]
+    # D5887-23, D5321-26, D6241-22a; optional dual prefix D5887/D5887M-23 in rare filenames
+    if re.match(
+        r"^[A-Z]\d{2,5}(?:/[A-Z]\d{2,5}[A-Z]?)?-\d{2,4}[A-Za-z]?$",
+        head,
+        re.IGNORECASE,
+    ):
+        return head.upper()
+    return None
+
+
 def _infer_standard_id(text: str, source_path: str | None) -> str:
+    from_path = _standard_id_from_source_path(source_path)
+    if from_path:
+        return from_path
     for regex in (ASTM_ID_RE, ISO_ID_RE, BS_ID_RE):
         match = regex.search(text)
         if match:

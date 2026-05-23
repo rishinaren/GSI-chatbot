@@ -5,17 +5,19 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from standards_rag.chat import StandardsRagEngine
 from standards_rag.openai_answer import build_openai_answer_rewriter_from_env
 from standards_rag.pinecone_hybrid import attach_pinecone_index, pinecone_enabled_from_env
-from standards_rag.retrieval import InMemoryStandardsStore
+from standards_rag.retrieval import InMemoryStandardsStore, resolve_document_pdf_path
 
 
 def create_app(store: InMemoryStandardsStore | None = None) -> Any:
     try:
         from fastapi import FastAPI, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
+        from fastapi.responses import FileResponse
     except ImportError as exc:
         raise RuntimeError("Install the optional 'api' dependencies to serve the API.") from exc
 
@@ -58,6 +60,21 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             unit_preference=payload.get("unit_preference"),
         )
         return response.to_dict()
+
+    @app.get("/documents/{document_id}/pdf")
+    def document_pdf(document_id: str) -> FileResponse:
+        doc = store.documents.get(unquote(document_id))
+        if doc is None:
+            raise HTTPException(status_code=404, detail="document not found")
+        path = resolve_document_pdf_path(doc)
+        if path is None:
+            raise HTTPException(status_code=404, detail="PDF not available for this document")
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=path.name,
+            content_disposition_type="inline",
+        )
 
     return app
 

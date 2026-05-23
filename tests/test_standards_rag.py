@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from standards_rag.chat import StandardsRagEngine
-from standards_rag.ingestion import load_document_from_text
+from standards_rag.ingestion import infer_document_metadata, load_document_from_text
 from standards_rag.models import DocumentType
 from standards_rag.retrieval import InMemoryStandardsStore
 
@@ -66,6 +66,21 @@ class StandardsRagTests(unittest.TestCase):
         self.store.add_documents([(self.d7762, d7762_chunks), (self.d698, d698_chunks)])
         self.engine = StandardsRagEngine(self.store)
 
+    def test_standard_id_prefers_filename_over_referenced_designations_in_body(self) -> None:
+        """Body text can cite D35-1004 before the cover designation; filename is authoritative."""
+        text = (
+            "See also ASTM D35-1004 for related procedures.\n\n"
+            "Designation: D5887/D5887M – 23\n"
+            "Standard Test Method for Measurement of Index Flux Through Saturated "
+            "Geosynthetic Clay Liner Specimens Using a Flexible Wall Permeameter\n"
+        )
+        doc = infer_document_metadata(
+            text,
+            source_path="/documents/Select ASTM methods/D5887-23 GCL Perm.pdf",
+        )
+        self.assertEqual(doc.standard_id, "D5887-23")
+        self.assertIn("d5887-23", doc.document_id.lower())
+
     def test_metadata_tracks_standard_identity_and_lifecycle(self) -> None:
         self.assertEqual(self.d7762.standard_id, "D7762-18")
         self.assertEqual(self.d7762.issuing_body, "ASTM")
@@ -80,7 +95,7 @@ class StandardsRagTests(unittest.TestCase):
         self.assertFalse(response.unsupported)
         self.assertGreaterEqual(len(response.citations), 1)
         self.assertIn("D7762-18", response.answer)
-        self.assertIn("Sources:", response.answer)
+        self.assertNotIn("Sources:", response.answer)
         self.assertTrue(response.citations[0].page_start)
 
     def test_direct_answer_is_grounded_in_retrieved_evidence(self) -> None:

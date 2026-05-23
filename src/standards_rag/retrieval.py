@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -13,6 +14,97 @@ from typing import Iterable
 from standards_rag.models import SourceChunk, StandardDocument
 
 TOKEN_RE = re.compile(r"[a-zA-Z0-9]+(?:[-/][a-zA-Z0-9]+)?")
+
+
+def resolve_document_pdf_path(document: StandardDocument) -> Path | None:
+    """Return an absolute path to the on-disk PDF for this document, if it is safe to serve.
+
+    When ``STANDARDS_PDF_ROOT`` is set, the resolved path must lie under that directory.
+    When unset (typical local dev), any existing ``.pdf`` at ``source_path`` is allowed.
+    """
+    if not document.source_path:
+        return None
+    path = Path(document.source_path).expanduser()
+    try:
+        if not path.is_file():
+            return None
+    except OSError:
+        return None
+    if path.suffix.lower() != ".pdf":
+        return None
+    resolved = path.resolve()
+    root_raw = os.getenv("STANDARDS_PDF_ROOT")
+    if root_raw:
+        root = Path(root_raw).expanduser().resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            return None
+    return resolved
+
+# Headings / early body lines that usually carry applicability vs procedural content.
+_SCOPE_SECTION_HINT = re.compile(
+    r"\b(scope|summary\s+of\s+test|significance\s+and\s+use|terminology|definitions|"
+    r"referenced\s+documents|significance|applicable|applicability)\b",
+    re.IGNORECASE,
+)
+_PROC_SECTION_HINT = re.compile(
+    r"\b(procedure|calculation|report|precision|bias|apparatus|specimen|summary\s+of\s+test\s+method)\b",
+    re.IGNORECASE,
+)
+
+
+def section_intent_boost(query: str, chunk: SourceChunk) -> float:
+    """Boost chunks whose heading/text match the query intent (scope vs procedure)."""
+    q = query.lower()
+    wants_scope = any(
+        k in q
+        for k in (
+            "which",
+            "apply",
+            "applicable",
+            "applicability",
+            "exclude",
+            "exclusion",
+            "scope",
+            "limitation",
+            "design",
+            "field",
+            "interchange",
+            "landfill",
+            "liner",
+            "when would",
+            "appropriate",
+            "methods would",
+            "evaluate",
+        )
+    )
+    wants_proc = any(
+        k in q
+        for k in (
+            "procedure",
+            "calculate",
+            "calculation",
+            "equation",
+            "report",
+            "precision",
+            "specimen",
+            "apparatus",
+            "step",
+        )
+    )
+    if not wants_scope and not wants_proc:
+        return 0.0
+
+    label = f"{chunk.heading or ''} {chunk.text[:400]}"
+    boost = 0.0
+    if wants_scope and _SCOPE_SECTION_HINT.search(label):
+        boost += 0.32
+    if wants_proc and _PROC_SECTION_HINT.search(label):
+        boost += 0.32
+    return boost
+
+
 STOP_WORDS = {
     "a",
     "an",
@@ -104,6 +196,7 @@ class InMemoryStandardsStore:
 
             score = self._score(chunk_counter, query_counter, chunk.text)
             score += _metadata_boost(query, document, chunk)
+            score += section_intent_boost(query, chunk)
             if score >= min_score:
                 results.append(
                     SearchResult(

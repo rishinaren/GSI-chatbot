@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from standards_rag.models import SourceChunk, StandardDocument
-from standards_rag.retrieval import InMemoryStandardsStore, SearchResult, _tokens
+from standards_rag.retrieval import InMemoryStandardsStore, SearchResult, section_intent_boost, _tokens
 
 _DEFAULT_EMBED_MODEL = "llama-text-embed-v2"
 
@@ -169,7 +169,8 @@ class PineconeHybridStore(InMemoryStandardsStore):
                 continue
             document = self.documents[chunk.document_id]
             lexical_score = _lexical_overlap_score(query_terms, chunk, document)
-            fused = 0.65 * pinecone_score + 0.35 * lexical_score
+            intent_boost = section_intent_boost(query, chunk)
+            fused = 0.65 * pinecone_score + 0.35 * lexical_score + intent_boost
             if fused >= min_score:
                 fused_scores.append((fused, chunk_id))
 

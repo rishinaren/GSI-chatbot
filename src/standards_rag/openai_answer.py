@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from standards_rag.models import Citation
+from standards_rag.answer_prompts import build_rewriter_system_prompt, is_comparison_question
+from standards_rag.models import Citation
 
 
 def openai_rewriter_enabled() -> bool:
@@ -39,27 +38,13 @@ def build_openai_answer_rewriter_from_env() -> Callable[[str, str, list[Citation
             cite_dict = citation.to_dict()
             citation_lines.append(f"[{index}] {cite_dict}")
 
-        system = (
-            "You are a careful technical assistant for standards documents.\n"
-            "Rewrite the user's draft answer to be clear and conversational.\n"
-            "Rules:\n"
-            "- Use ONLY facts supported by the Evidence and Citation objects.\n"
-            "- If the evidence is insufficient, say what is missing.\n"
-            "- Do not introduce requirements, numbers, units, tests, or clauses not present in Evidence.\n"
-            "- Preserve citation markers like [1], [2] when referring to evidence.\n"
-            "- If the draft answer says meanings/usages are context-dependent, keep that explicit framing.\n"
-            "- Keep per-context bullet points when they are present in the draft.\n"
-            "- For mathematical expressions, use LaTeX inside Markdown math delimiters:\n"
-            "  - Inline: $...$ (example: $v$, $A$, $n = \\left(\\frac{t_v}{A}\\right)^2$)\n"
-            "  - Display (standalone equation lines): $$...$$\n"
-            "- Do not wrap math in plain parentheses like ( v ) or ( n = \\frac{a}{b} ); use $...$ instead.\n"
-            "- Do not rearrange equations unless the rearrangement is explicitly supported by the cited evidence text.\n"
-            "- End with a 'Sources:' section listing the same citations in the same order.\n"
+        system = build_rewriter_system_prompt(
+            include_comparison_schema=is_comparison_question(question),
         )
 
         user = (
             f"Question:\n{question}\n\n"
-            f"Draft answer (must be consistent with evidence):\n{draft_answer}\n\n"
+            f"Draft answer (must be consistent with evidence; each [n] must match the draft):\n{draft_answer}\n\n"
             f"Citations (ground truth metadata):\n" + "\n".join(citation_lines)
         )
 

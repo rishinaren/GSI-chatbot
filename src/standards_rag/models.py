@@ -102,6 +102,7 @@ class Citation:
     page_end: int | None = None
     section: str | None = None
     quote: str | None = None
+    pdf_url: str | None = None
 
     @property
     def page_label(self) -> str:

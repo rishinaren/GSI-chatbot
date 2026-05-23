@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
-from standards_rag.models import Citation
-from standards_rag.retrieval import InMemoryStandardsStore, SearchResult
+from standards_rag.models import Citation, StandardDocument
+from standards_rag.retrieval import InMemoryStandardsStore, SearchResult, resolve_document_pdf_path
 from standards_rag.units import convert_measurement, extract_measurements, format_conversion
 
 SPECIFIC_STANDARD_RE = re.compile(
@@ -22,7 +23,6 @@ SPECIFIC_STANDARD_RE = re.compile(
 class ChatResponse:
     answer: str
     citations: list[Citation]
-    retrieved_documents: list[str]
     unsupported: bool = False
     needs_clarification: bool = False
     follow_up_suggestions: list[str] = field(default_factory=list)
@@ -31,7 +31,6 @@ class ChatResponse:
         return {
             "answer": self.answer,
             "citations": [citation.to_dict() for citation in self.citations],
-            "retrieved_documents": self.retrieved_documents,
             "unsupported": self.unsupported,
             "needs_clarification": self.needs_clarification,
             "follow_up_suggestions": self.follow_up_suggestions,
@@ -74,7 +73,6 @@ class StandardsRagEngine:
             return ChatResponse(
                 answer="Please ask a standards-related question.",
                 citations=[],
-                retrieved_documents=[],
                 needs_clarification=True,
             )
 
@@ -88,7 +86,6 @@ class StandardsRagEngine:
                         "body? I need enough detail to retrieve the right standard before answering."
                     ),
                     citations=[],
-                    retrieved_documents=[],
                     needs_clarification=True,
                     follow_up_suggestions=[
                         "Which standards mention fly ash stabilization?",
@@ -117,7 +114,6 @@ class StandardsRagEngine:
                         "I should not answer this from general knowledge without a cited source."
                     ),
                     citations=[],
-                    retrieved_documents=[],
                     unsupported=True,
                 ),
             )
@@ -150,10 +146,10 @@ class StandardsRagEngine:
         if not rewritten.strip():
             return response
 
+        cleaned = _strip_trailing_sources_footer(rewritten.strip())
         return ChatResponse(
-            answer=rewritten.strip(),
+            answer=cleaned,
             citations=response.citations,
-            retrieved_documents=response.retrieved_documents,
             unsupported=response.unsupported,
             needs_clarification=response.needs_clarification,
             follow_up_suggestions=response.follow_up_suggestions,
@@ -178,11 +174,9 @@ class StandardsRagEngine:
         if unit_note:
             answer += f"\n\nUnit note: {unit_note}"
 
-        answer += "\n\nSources:\n" + _format_sources(citations)
         return ChatResponse(
             answer=answer,
             citations=citations,
-            retrieved_documents=_document_labels(results),
             follow_up_suggestions=[
                 "Do you want this compared against another loaded standard?",
                 "Should I return the values in SI or US customary units?",
@@ -202,16 +196,10 @@ class StandardsRagEngine:
                 f"- {document.standard_id}: {document.title}. "
                 f"Relevant passage: {_evidence_sentence(result)} [{index}]"
             )
-        answer = (
-            "I found these relevant loaded standards:\n\n"
-            + "\n".join(lines)
-            + "\n\nSources:\n"
-            + _format_sources(citations)
-        )
+        answer = "I found these relevant loaded standards:\n\n" + "\n".join(lines)
         return ChatResponse(
             answer=answer,
             citations=citations,
-            retrieved_documents=_document_labels(results),
             follow_up_suggestions=[
                 "Ask me to compare these standards.",
                 "Ask for the relevant section from one standard.",
@@ -253,11 +241,9 @@ class StandardsRagEngine:
         unit_note = _unit_note(cited_results, unit_preference)
         if unit_note:
             answer += f"\n\nUnit note: {unit_note}"
-        answer += "\n\nSources:\n" + _format_sources(citations)
         return ChatResponse(
             answer=answer,
             citations=citations,
-            retrieved_documents=_document_labels(results),
             follow_up_suggestions=[
                 "Ask which difference matters for your use case.",
                 "Ask for only the sections that mention a specific value or unit.",
@@ -313,11 +299,9 @@ class StandardsRagEngine:
         unit_note = _unit_note(cited_results, unit_preference)
         if unit_note:
             answer += f"\n\nUnit note: {unit_note}"
-        answer += "\n\nSources:\n" + _format_sources(citations)
         return ChatResponse(
             answer=answer,
             citations=citations,
-            retrieved_documents=_document_labels(results),
             follow_up_suggestions=[
                 "Ask me to focus on one of these standards only.",
                 "Ask which context applies best for your specific test setup.",
@@ -387,6 +371,7 @@ def _citations_from_results(results: list[SearchResult] | tuple[SearchResult, ..
                 page_end=result.chunk.page_end,
                 section=result.chunk.section,
                 quote=_evidence_sentence(result, max_chars=240),
+                pdf_url=_document_pdf_url(result.document),
             )
         )
     return citations
@@ -416,19 +401,18 @@ def _evidence_sentence(result: SearchResult, *, max_chars: int = 360) -> str:
     return best
 
 
-def _format_sources(citations: list[Citation]) -> str:
-    return "\n".join(f"[{index}] {citation.format()}" for index, citation in enumerate(citations, 1))
+def _strip_trailing_sources_footer(text: str) -> str:
+    """Remove a trailing 'Sources:' bibliography if the model still emits one."""
+    for marker in ("\n\nSources:", "\r\n\r\nSources:"):
+        if marker in text:
+            return text.rsplit(marker, 1)[0].rstrip()
+    return text
 
 
-def _document_labels(results: list[SearchResult]) -> list[str]:
-    labels: list[str] = []
-    seen: set[str] = set()
-    for result in results:
-        label = f"{result.document.standard_id} - {result.document.title}"
-        if label not in seen:
-            seen.add(label)
-            labels.append(label)
-    return labels
+def _document_pdf_url(document: StandardDocument) -> str | None:
+    if resolve_document_pdf_path(document) is None:
+        return None
+    return f"/documents/{quote(document.document_id, safe='')}/pdf"
 
 
 def _is_compare_question(question: str) -> bool:
