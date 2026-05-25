@@ -1,6 +1,46 @@
 import { useState } from "react";
 import { signIn } from "../auth";
 
+function EyeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M2 12c1.8-3.5 5.4-6 10-6s8.2 2.5 10 6c-1.8 3.5-5.4 6-10 6s-8.2-2.5-10-6Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="3.1" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M2 12c1.8-3.5 5.4-6 10-6s8.2 2.5 10 6c-1.8 3.5-5.4 6-10 6s-8.2-2.5-10-6Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="3.1" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M3 3l18 18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function friendlyLoginError(rawMessage) {
   const text = String(rawMessage || "");
   if (
@@ -66,7 +106,7 @@ export default function LoginPanel({ onSignedIn }) {
               aria-label={showPassword ? "Hide password" : "Show password"}
               aria-pressed={showPassword}
             >
-              {showPassword ? "Hide" : "Show"}
+              {showPassword ? <EyeIcon /> : <EyeOffIcon />}
             </button>
           </div>
           {error ? <div className="login-error">{error}</div> : null}
