@@ -2,11 +2,12 @@ name: Deploy API
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
     paths:
       - "src/**"
       - "pyproject.toml"
       - "Dockerfile"
+      - "deploy/ecs-task-definition.json"
       - ".github/workflows/deploy-api.yml"
   workflow_dispatch:
 

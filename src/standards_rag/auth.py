@@ -81,9 +81,8 @@ class CognitoTokenValidator:
                 token,
                 signing_key.key,
                 algorithms=["RS256"],
-                audience=self.config.app_client_id,
                 issuer=self.issuer,
-                options={"verify_at_hash": False},
+                options={"verify_at_hash": False, "verify_aud": False},
             )
         except Exception as exc:  # noqa: BLE001 - surface as auth failure
             raise AuthError("Invalid or expired authentication token.") from exc
@@ -91,6 +90,12 @@ class CognitoTokenValidator:
         token_use = str(claims.get("token_use", ""))
         if token_use not in {"access", "id"}:
             raise AuthError("Unsupported token type.")
+        if token_use == "id":
+            if str(claims.get("aud", "")).strip() != str(self.config.app_client_id):
+                raise AuthError("Invalid authentication token audience.")
+        if token_use == "access":
+            if str(claims.get("client_id", "")).strip() != str(self.config.app_client_id):
+                raise AuthError("Invalid authentication token client.")
 
         user_id = str(claims.get("sub", "")).strip()
         if not user_id:
