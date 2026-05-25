@@ -98,6 +98,34 @@ select {
   border: 1px solid #dadce0;
 }
 
+.password-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-input-wrap input {
+  width: 100%;
+  padding-right: 64px;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 8px;
+  border: none;
+  background: transparent;
+  color: #1a73e8;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.password-toggle-btn:hover {
+  background: rgba(26, 115, 232, 0.08);
+}
+
 .login-form button {
   margin-top: 8px;
   padding: 12px 16px;
@@ -111,6 +139,10 @@ select {
 .login-error {
   color: #c5221f;
   font-size: 0.875rem;
+  background: #fce8e6;
+  border: 1px solid #f6aea9;
+  border-radius: 10px;
+  padding: 10px 12px;
 }
 
 .chat-sidebar {

@@ -17,7 +17,11 @@ from standards_rag.auth import (
 )
 from standards_rag.chat import StandardsRagEngine
 from standards_rag.conversation_store import build_conversation_store_from_env
-from standards_rag.env_bootstrap import default_standards_index_path, load_dotenv_files
+from standards_rag.env_bootstrap import (
+    default_standards_index_path,
+    load_dotenv_files,
+    sync_runtime_assets_from_s3,
+)
 from standards_rag.openai_answer import build_openai_answer_rewriter_from_env, openai_rewriter_enabled
 from standards_rag.pinecone_hybrid import attach_pinecone_index, pinecone_enabled_from_env
 from standards_rag.retrieval import InMemoryStandardsStore, resolve_document_pdf_path
@@ -25,6 +29,12 @@ from standards_rag.retrieval import InMemoryStandardsStore, resolve_document_pdf
 logger = logging.getLogger(__name__)
 
 load_dotenv_files()
+
+try:  # Optional at import time; create_app still validates runtime deps.
+    from fastapi import Request as FastAPIRequest
+except Exception:  # pragma: no cover - only when api deps missing
+    class FastAPIRequest:  # type: ignore[no-redef]
+        pass
 
 
 def _allowed_origins() -> list[str]:
@@ -44,6 +54,12 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         raise RuntimeError("Install the optional 'api' dependencies to serve the API.") from exc
 
     if store is None:
+        try:
+            downloaded = sync_runtime_assets_from_s3()
+            if downloaded:
+                logger.info("Synced %d runtime asset files from S3", downloaded)
+        except Exception as exc:
+            logger.warning("Could not sync runtime assets from S3: %s", exc)
         index_path = default_standards_index_path()
         if index_path.exists():
             store = InMemoryStandardsStore.load_json(index_path)
@@ -83,13 +99,13 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         allow_headers=["*"],
     )
 
-    def current_user(request: Request) -> AuthenticatedUser | None:
+    def current_user(request: FastAPIRequest) -> AuthenticatedUser | None:
         try:
             return authenticate_bearer_token(request.headers.get("Authorization"), config=auth_config)
         except AuthError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    def effective_user(request: Request) -> AuthenticatedUser:
+    def effective_user(request: FastAPIRequest) -> AuthenticatedUser:
         user = current_user(request)
         if user is not None:
             return user
@@ -125,7 +141,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     @app.get("/conversations")
-    def list_conversations(request: Request) -> dict[str, object]:
+    def list_conversations(request: FastAPIRequest) -> dict[str, object]:
         user = effective_user(request)
         records = conversation_store.list_conversations(user.user_id)
         return {
@@ -142,7 +158,9 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         }
 
     @app.post("/conversations")
-    def create_conversation(request: Request, payload: dict[str, Any] | None = None) -> dict[str, object]:
+    def create_conversation(
+        request: FastAPIRequest, payload: dict[str, Any] | None = None
+    ) -> dict[str, object]:
         user = effective_user(request)
         payload = payload or {}
         record = conversation_store.create_conversation(
@@ -154,7 +172,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         return record.to_dict()
 
     @app.get("/conversations/{conversation_id}")
-    def get_conversation(conversation_id: str, request: Request) -> dict[str, object]:
+    def get_conversation(conversation_id: str, request: FastAPIRequest) -> dict[str, object]:
         user = effective_user(request)
         record = conversation_store.get_conversation(user.user_id, conversation_id)
         if record is None:
@@ -162,7 +180,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         return record.to_dict()
 
     @app.delete("/conversations/{conversation_id}")
-    def delete_conversation(conversation_id: str, request: Request) -> dict[str, bool]:
+    def delete_conversation(conversation_id: str, request: FastAPIRequest) -> dict[str, bool]:
         user = effective_user(request)
         deleted = conversation_store.delete_conversation(user.user_id, conversation_id)
         if not deleted:
@@ -170,7 +188,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         return {"deleted": True}
 
     @app.post("/chat")
-    def chat(payload: dict[str, Any], request: Request) -> dict[str, object]:
+    def chat(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
         question = str(payload.get("question", "")).strip()
         if not question:
             raise HTTPException(status_code=400, detail="question is required")
@@ -185,7 +203,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         return response.to_dict()
 
     @app.get("/documents/{document_id}/pdf")
-    def document_pdf(document_id: str, request: Request) -> FileResponse:
+    def document_pdf(document_id: str, request: FastAPIRequest) -> FileResponse:
         effective_user(request)
 
         doc = store.documents.get(unquote(document_id))
