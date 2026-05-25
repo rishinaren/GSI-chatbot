@@ -110,7 +110,7 @@ export default function LoginPanel({ onSignedIn }) {
             </button>
           </div>
           {error ? <div className="login-error">{error}</div> : null}
-          <button type="submit" disabled={isSubmitting}>
+          <button type="submit" className="login-submit-btn" disabled={isSubmitting}>
             {isSubmitting ? "Signing in..." : "Sign in"}
           </button>
         </form>

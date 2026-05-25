@@ -106,23 +106,25 @@ select {
 
 .password-input-wrap input {
   width: 100%;
-  padding-right: 52px;
+  padding-right: 56px;
 }
 
 .password-toggle-btn {
   position: absolute;
-  right: 7px;
-  width: 36px;
-  height: 36px;
+  right: 1px;
+  top: 1px;
+  width: 48px;
+  height: calc(100% - 2px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
-  background: transparent;
+  border-left: 1px solid #dadce0;
+  background: #f8f9fa;
   color: #6b7280;
   cursor: pointer;
   padding: 0;
-  border-radius: 999px;
+  border-radius: 0 9px 9px 0;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -136,7 +138,7 @@ select {
   height: 22px;
 }
 
-.login-form button {
+.login-submit-btn {
   margin-top: 8px;
   padding: 12px 16px;
   border: none;
