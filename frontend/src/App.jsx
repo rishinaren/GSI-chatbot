@@ -100,7 +100,12 @@ function App() {
         await refreshConversations();
       }
     } catch (bootstrapError) {
-      setAuthState({ loading: false, authRequired: false, isLoggedIn: true });
+      setAuthState({
+        loading: false,
+        authRequired: true,
+        isLoggedIn: false,
+        configured: false,
+      });
       setError(bootstrapError instanceof Error ? bootstrapError.message : "Failed to initialize app.");
     }
   }
@@ -206,7 +211,7 @@ function App() {
   }
 
   if (authState.authRequired && !authState.isLoggedIn) {
-    return <LoginPanel onSignedIn={handleSignedIn} />;
+    return <LoginPanel onSignedIn={handleSignedIn} connectionError={error} />;
   }
 
   return (

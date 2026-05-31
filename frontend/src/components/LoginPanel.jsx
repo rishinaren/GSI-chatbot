@@ -53,7 +53,7 @@ function friendlyLoginError(rawMessage) {
   return "We couldn't sign you in. Please try again.";
 }
 
-export default function LoginPanel({ onSignedIn }) {
+export default function LoginPanel({ onSignedIn, connectionError = "" }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -79,6 +79,7 @@ export default function LoginPanel({ onSignedIn }) {
       <div className="login-card">
         <h1>GSI Chatbot</h1>
         <p>Sign in to access the standards research assistant.</p>
+        {connectionError ? <div className="login-error">{connectionError}</div> : null}
         <form onSubmit={handleSubmit} className="login-form">
           <label htmlFor="email">Email</label>
           <input
