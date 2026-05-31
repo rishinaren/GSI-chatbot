@@ -1,8 +1,42 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+const TOKEN_KEY = "gsi_access_token";
+const ID_TOKEN_KEY = "gsi_id_token";
+const PUBLIC_PATHS = new Set(["/auth/config", "/auth/login", "/health"]);
 
-function authHeaders() {
-  const token = localStorage.getItem("gsi_access_token");
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+export function clearStoredSession() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(ID_TOKEN_KEY);
+}
+
+function authHeaders(path) {
+  if (PUBLIC_PATHS.has(path)) {
+    return {};
+  }
+  const token = localStorage.getItem(TOKEN_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function parseApiError(detail) {
+  if (!detail) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(detail);
+    if (typeof parsed.detail === "string") {
+      return parsed.detail;
+    }
+  } catch {
+    // Keep raw text when the API does not return JSON.
+  }
+  return detail;
 }
 
 async function request(path, options = {}) {
@@ -10,13 +44,19 @@ async function request(path, options = {}) {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...authHeaders(),
+      ...authHeaders(path),
       ...(options.headers || {}),
     },
   });
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(detail || `Request failed with status ${response.status}`);
+    if (response.status === 401) {
+      clearStoredSession();
+    }
+    throw new ApiError(
+      parseApiError(detail) || `Request failed with status ${response.status}`,
+      response.status,
+    );
   }
   if (response.status === 204) {
     return null;

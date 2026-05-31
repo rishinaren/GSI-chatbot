@@ -14,7 +14,8 @@ import {
   sendChat,
   withApiBase,
 } from "./api";
-import { loadAuthState, signOut } from "./auth";
+import { ApiError } from "./api";
+import { clearSession, loadAuthState, signOut } from "./auth";
 
 const PAREN_NOT_AFTER_LATEX_OPENER = "(?<!\\\\(?:left|bigl|Bigl|biggl|Biggl|mleft))";
 
@@ -94,11 +95,20 @@ function App() {
 
   async function bootstrap() {
     try {
-      const state = await loadAuthState();
-      setAuthState({ loading: false, ...state });
+      let state = await loadAuthState();
       if (state.isLoggedIn) {
-        await refreshConversations();
+        try {
+          await refreshConversations();
+        } catch (refreshError) {
+          if (refreshError instanceof ApiError && refreshError.status === 401) {
+            clearSession();
+            state = { ...state, isLoggedIn: false };
+          } else {
+            throw refreshError;
+          }
+        }
       }
+      setAuthState({ loading: false, ...state });
     } catch (bootstrapError) {
       setAuthState({
         loading: false,

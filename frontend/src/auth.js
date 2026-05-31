@@ -1,4 +1,4 @@
-import { getAuthConfig, login as apiLogin } from "./api";
+import { clearStoredSession, getAuthConfig, login as apiLogin } from "./api";
 
 const TOKEN_KEY = "gsi_access_token";
 const ID_TOKEN_KEY = "gsi_id_token";
@@ -8,8 +8,7 @@ export function getAccessToken() {
 }
 
 export function clearSession() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(ID_TOKEN_KEY);
+  clearStoredSession();
 }
 
 export async function loadAuthState() {
