@@ -121,13 +121,19 @@ def infer_document_metadata(
 def load_document_from_pdf(
     path: str | Path, *, metadata_overrides: dict[str, object] | None = None
 ) -> tuple[StandardDocument, list[SourceChunk]]:
-    source_path = str(path)
-    pages = extract_pdf_pages(path)
+    pdf_path = Path(path)
+    try:
+        from standards_rag.env_bootstrap import project_root
+
+        source_path = str(pdf_path.relative_to(project_root()))
+    except ValueError:
+        source_path = str(pdf_path)
+    pages = extract_pdf_pages(pdf_path)
     text = "\n".join(page.text for page in pages)
     document = infer_document_metadata(
         text,
         source_path=source_path,
-        checksum=compute_sha256(path),
+        checksum=compute_sha256(pdf_path),
         overrides=metadata_overrides,
     )
     return document, chunk_pages(document, pages)

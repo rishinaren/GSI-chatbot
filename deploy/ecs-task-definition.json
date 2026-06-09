@@ -29,7 +29,7 @@
         { "name": "CORS_ALLOW_ORIGINS", "value": "https://dev.d1new0h0uf5on.amplifyapp.com,https://main.d1new0h0uf5on.amplifyapp.com" },
         { "name": "STANDARDS_ASSETS_S3_URI", "value": "s3://gsi-rag-assets-833239388618-us-east-1/" },
         { "name": "STANDARDS_INDEX_PATH", "value": "/app/data/index/standards.json" },
-        { "name": "STANDARDS_PDF_ROOT", "value": "/app/documents" }
+        { "name": "STANDARDS_PDF_ROOT", "value": "/app" }
       ],
       "secrets": [
         { "name": "OPENAI_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:833239388618:secret:gsi/openai-api-key" },
