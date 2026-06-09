@@ -157,6 +157,45 @@ select {
   padding: 10px 12px;
 }
 
+.login-success {
+  color: #137333;
+  font-size: 0.875rem;
+  background: #e6f4ea;
+  border: 1px solid #a8dab5;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.login-hint {
+  margin: -4px 0 0;
+  font-size: 0.8125rem;
+  color: #5f6368;
+}
+
+.login-switch {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.login-link-btn {
+  border: none;
+  background: transparent;
+  color: var(--chat-blue);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}
+
+.login-link-btn:hover {
+  text-decoration: underline;
+}
+
+.login-link-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .chat-sidebar {
   border-right: 1px solid #e8eaed;
   background: #f8f9fa;

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
@@ -49,8 +50,10 @@ def load_auth_config_from_env() -> AuthConfig:
 
 def auth_public_config(config: AuthConfig | None = None) -> dict[str, Any]:
     config = config or load_auth_config_from_env()
+    enabled = config.required and config.enabled
     return {
-        "auth_required": config.required and config.enabled,
+        "auth_required": enabled,
+        "signup_enabled": enabled,
         "cognito_user_pool_id": config.user_pool_id,
         "cognito_app_client_id": config.app_client_id,
         "cognito_region": config.region,
@@ -132,43 +135,80 @@ def authenticate_bearer_token(
     return validator.validate(token.strip())
 
 
-def login_with_password(email: str, password: str, *, config: AuthConfig | None = None) -> dict[str, str]:
-    """Exchange username/password for Cognito tokens via the USER_PASSWORD_AUTH flow."""
-    config = config or load_auth_config_from_env()
-    if not config.enabled:
-        raise AuthError("Cognito auth is not configured.", status_code=503)
+def _map_cognito_error_message(raw_message: str, *, error_type: str = "") -> str:
+    message = raw_message.strip()
+    error_name = error_type.rsplit("#", maxsplit=1)[-1] if error_type else ""
+    lowered = message.lower()
 
-    payload = {
-        "AuthFlow": "USER_PASSWORD_AUTH",
-        "ClientId": config.app_client_id,
-        "AuthParameters": {
-            "USERNAME": email,
-            "PASSWORD": password,
-        },
-    }
+    if error_name == "UsernameExistsException" or "usernameexistsexception" in lowered:
+        return "An account with this email already exists. Try signing in instead."
+    if error_name == "InvalidPasswordException" or "invalidpasswordexception" in lowered:
+        return (
+            "Password does not meet requirements. Use at least 8 characters with uppercase, "
+            "lowercase, numbers, and symbols."
+        )
+    if error_name == "InvalidParameterException" and "password" in lowered:
+        return (
+            "Password does not meet requirements. Use at least 8 characters with uppercase, "
+            "lowercase, numbers, and symbols."
+        )
+    if error_name == "CodeMismatchException" or "codemismatchexception" in lowered:
+        return "That verification code is incorrect. Please try again."
+    if error_name == "ExpiredCodeException" or "expiredcodeexception" in lowered:
+        return "That verification code has expired. Request a new code and try again."
+    if error_name == "UserNotConfirmedException" or "usernotconfirmedexception" in lowered:
+        return "Confirm your email with the verification code before signing in."
+    if error_name == "NotAuthorizedException" or "notauthorizedexception" in lowered:
+        if "incorrect username or password" in lowered:
+            return "That email or password is incorrect. Please try again."
+        return "Login failed. Check email and password."
+    if message:
+        return message
+    return "Authentication request failed."
+
+
+def _call_cognito_api(
+    target: str,
+    payload: dict[str, Any],
+    *,
+    config: AuthConfig,
+    default_error: str,
+    default_status: int = 400,
+) -> dict[str, Any]:
     url = f"https://cognito-idp.{config.region}.amazonaws.com/"
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/x-amz-json-1.1",
-            "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
+            "X-Amz-Target": target,
         },
         method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
-            body = json.loads(response.read().decode("utf-8"))
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            body = {}
+        message = _map_cognito_error_message(
+            str(body.get("message") or default_error),
+            error_type=str(body.get("__type") or ""),
+        )
+        raise AuthError(message, status_code=exc.code or default_status) from exc
     except Exception as exc:  # noqa: BLE001
-        raise AuthError("Login failed. Check email and password.") from exc
+        raise AuthError(default_error, status_code=default_status) from exc
 
-    result = body.get("AuthenticationResult") or {}
+
+def _token_response(result: dict[str, Any]) -> dict[str, str]:
     access_token = result.get("AccessToken")
     id_token = result.get("IdToken")
     refresh_token = result.get("RefreshToken")
     if not access_token or not id_token:
         raise AuthError("Login failed. Cognito did not return tokens.")
-
     return {
         "access_token": str(access_token),
         "id_token": str(id_token),
@@ -176,4 +216,94 @@ def login_with_password(email: str, password: str, *, config: AuthConfig | None 
         "expires_in": str(result.get("ExpiresIn", 3600)),
         "token_type": str(result.get("TokenType", "Bearer")),
         "issued_at": str(int(time.time())),
+    }
+
+
+def login_with_password(email: str, password: str, *, config: AuthConfig | None = None) -> dict[str, str]:
+    """Exchange username/password for Cognito tokens via the USER_PASSWORD_AUTH flow."""
+    config = config or load_auth_config_from_env()
+    if not config.enabled:
+        raise AuthError("Cognito auth is not configured.", status_code=503)
+
+    body = _call_cognito_api(
+        "AWSCognitoIdentityProviderService.InitiateAuth",
+        {
+            "AuthFlow": "USER_PASSWORD_AUTH",
+            "ClientId": config.app_client_id,
+            "AuthParameters": {
+                "USERNAME": email,
+                "PASSWORD": password,
+            },
+        },
+        config=config,
+        default_error="Login failed. Check email and password.",
+        default_status=401,
+    )
+    return _token_response(body.get("AuthenticationResult") or {})
+
+
+def sign_up_with_password(email: str, password: str, *, config: AuthConfig | None = None) -> dict[str, Any]:
+    """Register a new Cognito user with email and password."""
+    config = config or load_auth_config_from_env()
+    if not config.enabled:
+        raise AuthError("Cognito auth is not configured.", status_code=503)
+
+    body = _call_cognito_api(
+        "AWSCognitoIdentityProviderService.SignUp",
+        {
+            "ClientId": config.app_client_id,
+            "Username": email,
+            "Password": password,
+            "UserAttributes": [{"Name": "email", "Value": email}],
+        },
+        config=config,
+        default_error="Sign up failed. Check your email and password.",
+    )
+    delivery = body.get("CodeDeliveryDetails") or {}
+    return {
+        "user_confirmed": bool(body.get("UserConfirmed")),
+        "user_sub": str(body.get("UserSub") or ""),
+        "delivery_medium": str(delivery.get("DeliveryMedium") or ""),
+        "destination": str(delivery.get("Destination") or ""),
+    }
+
+
+def confirm_sign_up(email: str, confirmation_code: str, *, config: AuthConfig | None = None) -> dict[str, bool]:
+    """Confirm a newly registered Cognito user with an email verification code."""
+    config = config or load_auth_config_from_env()
+    if not config.enabled:
+        raise AuthError("Cognito auth is not configured.", status_code=503)
+
+    _call_cognito_api(
+        "AWSCognitoIdentityProviderService.ConfirmSignUp",
+        {
+            "ClientId": config.app_client_id,
+            "Username": email,
+            "ConfirmationCode": confirmation_code.strip(),
+        },
+        config=config,
+        default_error="Email confirmation failed. Check the verification code.",
+    )
+    return {"confirmed": True}
+
+
+def resend_confirmation_code(email: str, *, config: AuthConfig | None = None) -> dict[str, str]:
+    """Resend the Cognito email verification code for an unconfirmed user."""
+    config = config or load_auth_config_from_env()
+    if not config.enabled:
+        raise AuthError("Cognito auth is not configured.", status_code=503)
+
+    body = _call_cognito_api(
+        "AWSCognitoIdentityProviderService.ResendConfirmationCode",
+        {
+            "ClientId": config.app_client_id,
+            "Username": email,
+        },
+        config=config,
+        default_error="Could not resend the verification code.",
+    )
+    delivery = body.get("CodeDeliveryDetails") or {}
+    return {
+        "delivery_medium": str(delivery.get("DeliveryMedium") or ""),
+        "destination": str(delivery.get("Destination") or ""),
     }

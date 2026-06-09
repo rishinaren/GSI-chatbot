@@ -1,7 +1,14 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 const TOKEN_KEY = "gsi_access_token";
 const ID_TOKEN_KEY = "gsi_id_token";
-const PUBLIC_PATHS = new Set(["/auth/config", "/auth/login", "/health"]);
+const PUBLIC_PATHS = new Set([
+  "/auth/config",
+  "/auth/login",
+  "/auth/signup",
+  "/auth/confirm",
+  "/auth/resend-confirmation",
+  "/health",
+]);
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -76,6 +83,27 @@ export function login(email, password) {
   return request("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
+  });
+}
+
+export function signUp(email, password) {
+  return request("/auth/signup", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function confirmSignUp(email, confirmationCode) {
+  return request("/auth/confirm", {
+    method: "POST",
+    body: JSON.stringify({ email, confirmation_code: confirmationCode }),
+  });
+}
+
+export function resendConfirmationCode(email) {
+  return request("/auth/resend-confirmation", {
+    method: "POST",
+    body: JSON.stringify({ email }),
   });
 }
 

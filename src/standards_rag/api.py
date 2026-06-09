@@ -12,8 +12,11 @@ from standards_rag.auth import (
     AuthenticatedUser,
     auth_public_config,
     authenticate_bearer_token,
+    confirm_sign_up,
     load_auth_config_from_env,
     login_with_password,
+    resend_confirmation_code,
+    sign_up_with_password,
 )
 from standards_rag.chat import StandardsRagEngine
 from standards_rag.conversation_store import build_conversation_store_from_env
@@ -137,6 +140,38 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             raise HTTPException(status_code=400, detail="email and password are required")
         try:
             return login_with_password(email, password, config=auth_config)
+        except AuthError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/auth/signup")
+    def auth_signup(payload: dict[str, Any]) -> dict[str, object]:
+        email = str(payload.get("email", "")).strip()
+        password = str(payload.get("password", ""))
+        if not email or not password:
+            raise HTTPException(status_code=400, detail="email and password are required")
+        try:
+            return sign_up_with_password(email, password, config=auth_config)
+        except AuthError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/auth/confirm")
+    def auth_confirm(payload: dict[str, Any]) -> dict[str, bool]:
+        email = str(payload.get("email", "")).strip()
+        confirmation_code = str(payload.get("confirmation_code", "")).strip()
+        if not email or not confirmation_code:
+            raise HTTPException(status_code=400, detail="email and confirmation_code are required")
+        try:
+            return confirm_sign_up(email, confirmation_code, config=auth_config)
+        except AuthError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/auth/resend-confirmation")
+    def auth_resend_confirmation(payload: dict[str, Any]) -> dict[str, str]:
+        email = str(payload.get("email", "")).strip()
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        try:
+            return resend_confirmation_code(email, config=auth_config)
         except AuthError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 

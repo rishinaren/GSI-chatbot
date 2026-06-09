@@ -1,4 +1,11 @@
-import { clearStoredSession, getAuthConfig, login as apiLogin } from "./api";
+import {
+  clearStoredSession,
+  confirmSignUp as apiConfirmSignUp,
+  getAuthConfig,
+  login as apiLogin,
+  resendConfirmationCode as apiResendConfirmationCode,
+  signUp as apiSignUp,
+} from "./api";
 
 const TOKEN_KEY = "gsi_access_token";
 const ID_TOKEN_KEY = "gsi_id_token";
@@ -26,6 +33,18 @@ export async function signIn(email, password) {
   localStorage.setItem(TOKEN_KEY, tokens.access_token);
   localStorage.setItem(ID_TOKEN_KEY, tokens.id_token);
   return tokens;
+}
+
+export async function signUp(email, password) {
+  return apiSignUp(email, password);
+}
+
+export async function confirmSignUp(email, confirmationCode) {
+  return apiConfirmSignUp(email, confirmationCode);
+}
+
+export async function resendConfirmationCode(email) {
+  return apiResendConfirmationCode(email);
 }
 
 export function signOut() {
