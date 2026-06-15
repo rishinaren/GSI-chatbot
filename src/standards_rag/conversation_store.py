@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -42,6 +43,7 @@ class ConversationRecord:
     messages: list[StoredMessage] = field(default_factory=list)
     organization_id: str | None = None
     unit_preference: str | None = None
+    pinned: bool = False
     created_at: str = field(default_factory=_utc_now_iso)
     updated_at: str = field(default_factory=_utc_now_iso)
 
@@ -53,6 +55,7 @@ class ConversationRecord:
             "messages": [message.to_dict() for message in self.messages],
             "organization_id": self.organization_id,
             "unit_preference": self.unit_preference,
+            "pinned": self.pinned,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -66,6 +69,7 @@ class ConversationRecord:
             messages=[StoredMessage.from_dict(item) for item in data.get("messages", [])],
             organization_id=data.get("organization_id"),
             unit_preference=data.get("unit_preference"),
+            pinned=bool(data.get("pinned", False)),
             created_at=str(data.get("created_at") or _utc_now_iso()),
             updated_at=str(data.get("updated_at") or _utc_now_iso()),
         )
@@ -101,7 +105,14 @@ class ConversationStore(ABC):
         answer: str,
         citations: list[dict[str, Any]],
         unit_preference: str | None = None,
+        title_generator: Callable[[str, str], str] | None = None,
     ) -> ConversationRecord:
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_pinned(
+        self, user_id: str, conversation_id: str, pinned: bool
+    ) -> ConversationRecord | None:
         raise NotImplementedError
 
     @abstractmethod
@@ -115,7 +126,7 @@ class InMemoryConversationStore(ConversationStore):
 
     def list_conversations(self, user_id: str, *, limit: int = 50) -> list[ConversationRecord]:
         rows = [record for (uid, _), record in self._records.items() if uid == user_id]
-        rows.sort(key=lambda item: item.updated_at, reverse=True)
+        rows.sort(key=lambda item: (item.pinned, item.updated_at), reverse=True)
         return rows[:limit]
 
     def get_conversation(self, user_id: str, conversation_id: str) -> ConversationRecord | None:
@@ -148,23 +159,34 @@ class InMemoryConversationStore(ConversationStore):
         answer: str,
         citations: list[dict[str, Any]],
         unit_preference: str | None = None,
+        title_generator: Callable[[str, str], str] | None = None,
     ) -> ConversationRecord:
         record = self.get_conversation(user_id, conversation_id)
         if record is None:
             record = ConversationRecord(
                 conversation_id=conversation_id,
                 user_id=user_id,
-                title=_title_from_question(question),
+                title="New chat",
             )
             self._records[(user_id, conversation_id)] = record
 
+        is_first_turn = not record.messages
         record.messages.append(StoredMessage(role="user", text=question))
         record.messages.append(StoredMessage(role="assistant", text=answer, citations=citations))
         record.updated_at = _utc_now_iso()
         if unit_preference:
             record.unit_preference = unit_preference
-        if record.title == "New chat":
-            record.title = _title_from_question(question)
+        if record.title == "New chat" and is_first_turn:
+            record.title = _resolve_title(question, answer, title_generator)
+        return record
+
+    def set_pinned(
+        self, user_id: str, conversation_id: str, pinned: bool
+    ) -> ConversationRecord | None:
+        record = self.get_conversation(user_id, conversation_id)
+        if record is None:
+            return None
+        record.pinned = pinned
         return record
 
     def delete_conversation(self, user_id: str, conversation_id: str) -> bool:
@@ -192,7 +214,9 @@ class DynamoDBConversationStore(ConversationStore):
             ScanIndexForward=False,
             Limit=limit,
         )
-        return [ConversationRecord.from_dict(item) for item in response.get("Items", [])]
+        records = [ConversationRecord.from_dict(item) for item in response.get("Items", [])]
+        records.sort(key=lambda item: (item.pinned, item.updated_at), reverse=True)
+        return records
 
     def get_conversation(self, user_id: str, conversation_id: str) -> ConversationRecord | None:
         response = self._table.get_item(Key={"user_id": user_id, "conversation_id": conversation_id})
@@ -226,21 +250,33 @@ class DynamoDBConversationStore(ConversationStore):
         answer: str,
         citations: list[dict[str, Any]],
         unit_preference: str | None = None,
+        title_generator: Callable[[str, str], str] | None = None,
     ) -> ConversationRecord:
         record = self.get_conversation(user_id, conversation_id)
         if record is None:
             record = ConversationRecord(
                 conversation_id=conversation_id,
                 user_id=user_id,
-                title=_title_from_question(question),
+                title="New chat",
             )
+        is_first_turn = not record.messages
         record.messages.append(StoredMessage(role="user", text=question))
         record.messages.append(StoredMessage(role="assistant", text=answer, citations=citations))
         record.updated_at = _utc_now_iso()
         if unit_preference:
             record.unit_preference = unit_preference
-        if record.title == "New chat":
-            record.title = _title_from_question(question)
+        if record.title == "New chat" and is_first_turn:
+            record.title = _resolve_title(question, answer, title_generator)
+        self._table.put_item(Item=record.to_dict())
+        return record
+
+    def set_pinned(
+        self, user_id: str, conversation_id: str, pinned: bool
+    ) -> ConversationRecord | None:
+        record = self.get_conversation(user_id, conversation_id)
+        if record is None:
+            return None
+        record.pinned = pinned
         self._table.put_item(Item=record.to_dict())
         return record
 
@@ -257,6 +293,24 @@ def _title_from_question(question: str) -> str:
     if len(cleaned) <= 72:
         return cleaned or "New chat"
     return cleaned[:69].rstrip() + "..."
+
+
+def _resolve_title(
+    question: str,
+    answer: str,
+    title_generator: Callable[[str, str], str] | None,
+) -> str:
+    """Use the LLM title generator when available; fall back to the question text."""
+    if title_generator is not None:
+        try:
+            generated = title_generator(question, answer).strip()
+        except Exception:  # noqa: BLE001 - never block persistence on title generation
+            generated = ""
+        if generated:
+            cleaned = " ".join(generated.split()).strip("\"'")
+            if cleaned:
+                return cleaned[:60].rstrip()
+    return _title_from_question(question)
 
 
 def build_conversation_store_from_env() -> ConversationStore:

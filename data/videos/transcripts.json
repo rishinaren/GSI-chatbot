@@ -1,0 +1,32 @@
+{
+  "_comment": "Video transcript store for the GSI chatbot. Replace each placeholder 'youtube_id' (PLACEHOLDER_*) with the real 11-character YouTube id from the video URL (the part after watch?v=). Retrieval matches a user's question against 'title' + 'standards' + 'transcript'.",
+  "videos": [
+    {
+      "video_id": "gsi-d4491-permittivity",
+      "youtube_id": "PLACEHOLDER01",
+      "title": "GRI ASTM D4491 Water Permeability of Geotextiles by Permittivity (GT12, GT13, AASHTO M288)",
+      "channel": "Geosynthetic Institute",
+      "standards": ["D4491", "GT12", "GT13", "AASHTO M288"],
+      "description": "Geosynthetic Institute instructional demonstration of ASTM D4491 measuring water permeability of geotextiles by permittivity, including constant head and falling head procedures.",
+      "transcript": "This demonstration covers ASTM D4491, the standard test methods for water permeability of geotextiles by permittivity. Permittivity is an indicator of the quantity of water that can pass through a geotextile in an isolated, uncompressed condition. The test includes two procedures: the constant head method and the falling head method. We saturate the geotextile specimen, deair it, and measure the flow rate of water normal to the plane of the fabric. Permittivity relates the flow rate to the head loss across the specimen and the cross sectional area. These permittivity values feed GRI GT12 cushioning and GT13 separation specifications and augment the AASHTO M288 specification for highway geotextiles."
+    },
+    {
+      "video_id": "gsi-d5321-direct-shear",
+      "youtube_id": "PLACEHOLDER02",
+      "title": "ASTM D5321 Direct Shear of Geosynthetic Interfaces",
+      "channel": "Geosynthetic Institute",
+      "standards": ["D5321"],
+      "description": "Demonstration of the direct shear test for determining the shear strength of soil-geosynthetic and geosynthetic-geosynthetic interfaces.",
+      "transcript": "Here we run ASTM D5321, the direct shear test method used to determine the shear strength of geosynthetic interfaces and soil against geosynthetics. A specimen is placed in a large direct shear box, a normal stress is applied, and the upper box is displaced at a constant rate of shear displacement while we record shear force. Testing at three or more normal stresses produces a failure envelope, giving the interface friction angle and adhesion. This is a performance test and the results are interface specific, so values should not be generalized across different geosynthetics or soils."
+    },
+    {
+      "video_id": "gsi-d4716-transmissivity",
+      "youtube_id": "PLACEHOLDER03",
+      "title": "ASTM D4716 In-Plane Flow Rate and Transmissivity of Geosynthetics",
+      "channel": "Geosynthetic Institute",
+      "standards": ["D4716"],
+      "description": "Demonstration of measuring in-plane hydraulic transmissivity and flow rate of drainage geocomposites and geonets under load.",
+      "transcript": "This clip walks through ASTM D4716, the test method for determining the in-plane flow rate per unit width and hydraulic transmissivity of a geosynthetic such as a geonet or drainage geocomposite. The specimen is placed between substrates under a range of normal stresses and hydraulic gradients, and we measure the in-plane flow of water. Transmissivity decreases as normal stress increases and depends on gradient, boundary conditions, and seating time, so the test conditions must be reported with the results for design use."
+    }
+  ]
+}

@@ -24,11 +24,16 @@ When citing with [n]:
 """
 
 REWRITER_GROUNDING = """
-You are polishing a draft that already lists only source-backed claims with inline [n] citations.
-- Keep every substantive claim traceable to the same [n] as in the draft; you may merge or split sentences if citations still line up.
-- Do not add new facts, numbers, standards, or applicability statements beyond what the draft already states.
-- You may tighten wording, improve flow, and fix grammar; keep technical meaning unchanged.
-- If the draft already notes missing evidence, keep that honest limitation.
+You are turning retrieved standard excerpts into a clear, explanatory answer for an engineer.
+- Explain what the cited evidence means in plain, well-structured prose. Paraphrase and synthesize;
+  do NOT copy the excerpt sentences verbatim and do NOT just list raw quotes.
+- Lead with a direct, helpful answer to the question, then expand with the supporting detail.
+- Every factual claim must stay grounded in the retrieved excerpts. Do not add facts, numbers,
+  standards, or applicability statements that are not supported by the cited evidence.
+- Attach the inline [n] marker(s) to the claim each excerpt supports, using the same numbering as the
+  draft. Keep a marker on every sentence that states a sourced fact so citations stay traceable.
+- Prefer short paragraphs or tight bullet points over a wall of text.
+- If the evidence only partially answers the question, say plainly what the excerpts do and do not establish.
 """
 
 COMPARISON_ANSWER_SCHEMA = """
@@ -72,9 +77,14 @@ def is_comparison_question(question: str) -> bool:
 
 def build_rewriter_system_prompt(*, include_comparison_schema: bool) -> str:
     parts = [
-        "You are a careful technical assistant for standards documents.\n",
-        "Rewrite the draft answer to be clear and readable for an engineer.\n",
-        "Stay faithful to the draft: same facts, same [1], [2], … markers tied to the same claims.\n",
+        "You are a knowledgeable technical assistant for geosynthetics standards.\n",
+        "The draft below is a list of raw excerpts retrieved from standards documents. "
+        "Rewrite it into a clear, conversational explanation that an engineer can read and "
+        "understand, as if you are teaching the concept.\n",
+        "Explain what the retrieved evidence means in your own words; do NOT just repeat the "
+        "excerpts verbatim. Synthesize the points into coherent prose and short paragraphs.\n",
+        "Stay strictly grounded: only state facts, numbers, and conclusions that the retrieved "
+        "evidence supports. Keep every [1], [2], … marker attached to the claim it supports.\n",
         "\n",
         REWRITER_GROUNDING.strip(),
         "\n\n",
@@ -87,7 +97,11 @@ def build_rewriter_system_prompt(*, include_comparison_schema: bool) -> str:
     parts.append(MATH_AND_FORMAT_RULES.strip())
     parts.append(
         "\n\nAdditional rules:\n"
-        "- If the evidence in the draft is insufficient, say what is missing.\n"
+        "- Lead with a direct, plain-language answer to the question, then explain the supporting "
+        "detail from the evidence.\n"
+        "- Paraphrase and explain the evidence instead of quoting it word-for-word.\n"
+        "- Do not add new facts, numbers, or standards beyond what the evidence supports.\n"
+        "- If the evidence is insufficient for part of the question, say what is missing.\n"
         "- Preserve citation markers [1], [2] when referring to evidence.\n"
         "- If the draft says meanings/usages are context-dependent, keep that framing.\n"
         "- Keep per-context bullet points when they are present in the draft.\n"
@@ -95,3 +109,15 @@ def build_rewriter_system_prompt(*, include_comparison_schema: bool) -> str:
         "of your draft').\n"
     )
     return "".join(parts)
+
+
+def build_title_system_prompt() -> str:
+    return (
+        "You generate a very short title for a saved research chat about geosynthetics and "
+        "ASTM/ISO standards.\n"
+        "Rules:\n"
+        "- 3 to 6 words, Title Case.\n"
+        "- No quotation marks, no trailing punctuation, no emojis.\n"
+        "- Capture the specific topic (e.g. a standard designation or test concept) when present.\n"
+        "- Output ONLY the title text, nothing else."
+    )

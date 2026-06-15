@@ -126,6 +126,20 @@ export function deleteConversation(conversationId) {
   return request(`/conversations/${conversationId}`, { method: "DELETE" });
 }
 
+export function pinConversation(conversationId, pinned) {
+  return request(`/conversations/${conversationId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ pinned }),
+  });
+}
+
+export function searchVideos(query, topK = 3) {
+  return request("/videos/search", {
+    method: "POST",
+    body: JSON.stringify({ query, top_k: topK }),
+  });
+}
+
 export function sendChat(payload) {
   return request("/chat", {
     method: "POST",
@@ -137,4 +151,16 @@ export function withApiBase(path) {
   if (!path) return path;
   if (path.startsWith("http")) return path;
   return `${API_BASE}${path}`;
+}
+
+// PDFs open via a top-level browser navigation (new tab), which cannot send the
+// Authorization header. Append the access token as a query param so the API can
+// authenticate the request.
+export function withAuthedFileUrl(path) {
+  const base = withApiBase(path);
+  if (!base) return base;
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) return base;
+  const separator = base.includes("?") ? "&" : "?";
+  return `${base}${separator}token=${encodeURIComponent(token)}`;
 }

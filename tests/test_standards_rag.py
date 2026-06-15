@@ -261,7 +261,9 @@ class StandardsRagTests(unittest.TestCase):
     def test_rewriter_prompt_forbids_rewrite_stage_disclosure(self) -> None:
         prompt = build_rewriter_system_prompt(include_comparison_schema=True)
         self.assertIn("Never mention the rewrite process", prompt)
-        self.assertIn("polishing a draft", prompt.lower())
+        # The rewriter should explain the evidence rather than quote it verbatim.
+        self.assertIn("verbatim", prompt.lower())
+        self.assertIn("explain", prompt.lower())
 
     def test_follow_up_uses_conversation_context_and_converts_units(self) -> None:
         self.engine.ask("What does D7762-18 say about fly ash stabilization?", conversation_id="demo")

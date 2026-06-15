@@ -7,6 +7,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from standards_rag.citation_validation import validate_answer_citations
@@ -14,6 +15,9 @@ from standards_rag.conversation_store import ConversationStore
 from standards_rag.models import Citation, StandardDocument
 from standards_rag.retrieval import InMemoryStandardsStore, SearchResult, resolve_document_pdf_path
 from standards_rag.units import convert_measurement, extract_measurements, format_conversion
+
+if TYPE_CHECKING:
+    from standards_rag.video import VideoTranscriptStore
 
 SPECIFIC_STANDARD_RE = re.compile(
     r"\b(?:ASTM\s*)?[A-Z]\d{2,5}(?:/[A-Z]\d{2,5})?-\d{2,4}[A-Z]?\b|"
@@ -50,6 +54,7 @@ class ChatResponse:
     unsupported: bool = False
     needs_clarification: bool = False
     follow_up_suggestions: list[str] = field(default_factory=list)
+    videos: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -58,6 +63,7 @@ class ChatResponse:
             "unsupported": self.unsupported,
             "needs_clarification": self.needs_clarification,
             "follow_up_suggestions": self.follow_up_suggestions,
+            "videos": self.videos,
         }
 
 
@@ -88,12 +94,16 @@ class StandardsRagEngine:
         min_score: float = 0.005,
         answer_rewriter: Callable[[str, str, list[Citation]], str] | None = None,
         conversation_store: ConversationStore | None = None,
+        video_store: "VideoTranscriptStore | None" = None,
+        title_generator: Callable[[str, str], str] | None = None,
     ) -> None:
         self.store = store
         self.top_k = top_k
         self.min_score = min_score
         self.answer_rewriter = answer_rewriter
         self.conversation_store = conversation_store
+        self.video_store = video_store
+        self.title_generator = title_generator
         self._history: dict[str, list[_ConversationTurn]] = {}
 
     def ask(
@@ -252,6 +262,7 @@ class StandardsRagEngine:
 
         response = self._maybe_rewrite_answer(clean_question, response)
         response = self._verify_citations_in_answer(response)
+        response = self._attach_videos(clean_question, response)
         return self._remember(
             conversation_id,
             clean_question,
@@ -986,8 +997,30 @@ class StandardsRagEngine:
                 answer=response.answer,
                 citations=[citation.to_dict() for citation in response.citations],
                 unit_preference=unit_preference,
+                title_generator=self.title_generator,
             )
         return response
+
+    def _attach_videos(self, question: str, response: ChatResponse) -> ChatResponse:
+        """Cross-reference the question/answer with the video transcript store."""
+        if self.video_store is None or len(self.video_store) == 0:
+            return response
+        if response.needs_clarification:
+            return response
+
+        from standards_rag.video import video_request_explicit
+
+        explicit = video_request_explicit(question)
+        # Lower the bar (and always surface the top hit) when a video is requested.
+        min_score = 0.03 if explicit else 0.18
+        top_k = 2 if explicit else 1
+        matches = self.video_store.search(question, top_k=top_k, min_score=min_score)
+        if not matches:
+            return response
+
+        from dataclasses import replace
+
+        return replace(response, videos=[match.to_dict() for match in matches])
 
     def _hydrate_history_from_store(self, user_id: str, conversation_id: str) -> None:
         if conversation_id in self._history or not self.conversation_store:

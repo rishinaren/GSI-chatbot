@@ -262,6 +262,7 @@ select {
 
 .sidebar-item-button {
   flex: 1;
+  min-width: 0;
   text-align: left;
   border: 1px solid transparent;
   background: transparent;
@@ -272,6 +273,7 @@ select {
 
 .sidebar-item-title {
   display: block;
+  max-width: 100%;
   font-size: 0.875rem;
   color: #202124;
   white-space: nowrap;
@@ -842,4 +844,329 @@ select {
 .landing-cta:hover {
   background: #6f8359;
   transform: translateY(-1px);
+}
+
+/* ---------- Header tools: units + theme toggle ---------- */
+.unit-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.unit-control label {
+  font-size: 0.75rem;
+  color: var(--muted, #5f6368);
+  white-space: nowrap;
+}
+
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.select-wrap select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 150px;
+  padding: 8px 32px 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--control-border, #dadce0);
+  background: var(--control-bg, #f1f3f4);
+  color: var(--text, #202124);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.select-wrap select:focus-visible {
+  outline: none;
+  border-color: var(--accent, #1a73e8);
+  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.18);
+}
+
+.icon-toggle {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--control-border, #dadce0);
+  background: var(--control-bg, #f1f3f4);
+  color: var(--text, #3c4043);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-toggle:hover {
+  background: var(--control-hover, #e8eaed);
+}
+
+.icon-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* ---------- Sidebar pin + actions ---------- */
+.sidebar-item-actions {
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-pin {
+  width: 30px;
+  border: none;
+  background: transparent;
+  color: #9aa0a6;
+  cursor: pointer;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.sidebar-item:hover .sidebar-pin,
+.sidebar-item.pinned .sidebar-pin {
+  opacity: 1;
+}
+
+.sidebar-pin:hover {
+  background: rgba(26, 115, 232, 0.12);
+  color: var(--accent, #1a73e8);
+}
+
+.sidebar-pin.active {
+  color: var(--accent, #1a73e8);
+}
+
+/* ---------- Empty state (centered composer) ---------- */
+.empty-state {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--app-bg, #ffffff);
+}
+
+.empty-inner {
+  width: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+
+.empty-title {
+  margin: 0;
+  font-size: clamp(1.6rem, 3.5vw, 2.1rem);
+  font-weight: 600;
+  color: var(--text, #202124);
+}
+
+.empty-sub {
+  margin: 0 0 16px;
+  color: var(--muted, #5f6368);
+  font-size: 0.95rem;
+}
+
+.empty-inner .composer-inner {
+  width: 100%;
+}
+
+/* ---------- Video embeds ---------- */
+.video-block {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.video-embed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.video-frame {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000000;
+}
+
+.video-frame iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.video-caption {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--accent, #1557b0);
+  text-decoration: none;
+  max-width: 460px;
+}
+
+.video-caption:hover {
+  text-decoration: underline;
+}
+
+.composer-inner.hero {
+  background: var(--control-bg, #f1f3f4);
+  box-shadow: 0 4px 18px rgba(60, 64, 67, 0.08);
+}
+
+.composer-error.centered {
+  text-align: center;
+}
+
+/* ---------- Dark theme ---------- */
+[data-theme="dark"] {
+  --app-bg: #1a1b1e;
+  --text: #e8eaed;
+  --muted: #9aa0a6;
+  --accent: #8ab4f8;
+  --control-bg: #2a2c31;
+  --control-border: #3c4043;
+  --control-hover: #34363b;
+}
+
+[data-theme="dark"] body,
+[data-theme="dark"] .app-shell,
+[data-theme="dark"] .app-main,
+[data-theme="dark"] .chat-body,
+[data-theme="dark"] .message-scroll,
+[data-theme="dark"] .empty-state {
+  background: #1a1b1e;
+  color: #e8eaed;
+}
+
+[data-theme="dark"] .chat-sidebar {
+  background: #202124;
+  border-right-color: #2e3033;
+}
+
+[data-theme="dark"] .sidebar-header p,
+[data-theme="dark"] .sidebar-item-meta,
+[data-theme="dark"] .chat-header-sub,
+[data-theme="dark"] .empty-sub {
+  color: #9aa0a6;
+}
+
+[data-theme="dark"] .sidebar-header h2,
+[data-theme="dark"] .sidebar-item-title,
+[data-theme="dark"] .chat-header h1,
+[data-theme="dark"] .empty-title {
+  color: #e8eaed;
+}
+
+[data-theme="dark"] .sidebar-new-chat {
+  background: #2a2c31;
+  border-color: #3c4043;
+  color: #e8eaed;
+}
+
+[data-theme="dark"] .sidebar-item.active .sidebar-item-button {
+  background: #2f3b52;
+  border-color: #3c5680;
+}
+
+[data-theme="dark"] .chat-header {
+  background: #202124;
+  border-bottom-color: #2e3033;
+}
+
+[data-theme="dark"] .bubble.bot {
+  background: #2a2c31;
+  color: #e8eaed;
+}
+
+[data-theme="dark"] .bubble.user {
+  background: #3b4252;
+  color: #f1f3f4;
+}
+
+[data-theme="dark"] .typing-dots {
+  background: #2a2c31;
+}
+
+[data-theme="dark"] .meta-block {
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] .meta-title {
+  color: #9aa0a6;
+}
+
+[data-theme="dark"] .bubble.bot .meta-block a.doc-pdf-link {
+  color: #8ab4f8;
+}
+
+[data-theme="dark"] .markdown-body pre {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .composer-wrap {
+  background: #1a1b1e;
+  border-top-color: #2e3033;
+}
+
+[data-theme="dark"] .composer-inner {
+  background: #2a2c31;
+}
+
+[data-theme="dark"] .composer-inner:focus-within {
+  background: #202124;
+}
+
+[data-theme="dark"] .composer-input {
+  color: #e8eaed;
+}
+
+[data-theme="dark"] .composer-input::placeholder {
+  color: #80868b;
+}
+
+[data-theme="dark"] .follow-up-chip {
+  background: #2a2c31;
+  border-color: #3c4043;
+  color: #e8eaed;
+}
+
+[data-theme="dark"] .follow-up-chip:hover {
+  background: #34363b;
+}
+
+[data-theme="dark"] .sign-out-btn {
+  background: #2a2c31;
+  border-color: #3c4043;
+  color: #e8eaed;
+}
+
+[data-theme="dark"] .app-loading {
+  background: #1a1b1e;
+  color: #e8eaed;
 }

@@ -1,5 +1,6 @@
 .DS_Store
 .env
+HANDOFF.md
 .venv/
 __pycache__/
 *.py[cod]
@@ -11,5 +12,6 @@ build/
 data/raw/
 data/index/
 documents/
+gsi docs/
 frontend/node_modules/
 frontend/dist/

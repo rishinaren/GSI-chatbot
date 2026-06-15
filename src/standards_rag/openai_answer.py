@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from typing import Any
 
-from standards_rag.answer_prompts import build_rewriter_system_prompt, is_comparison_question
+from standards_rag.answer_prompts import (
+    build_rewriter_system_prompt,
+    build_title_system_prompt,
+    is_comparison_question,
+)
 from standards_rag.models import Citation
 
 
@@ -14,6 +19,45 @@ def openai_rewriter_enabled() -> bool:
     if flag in {"1", "true", "yes", "on"}:
         return True
     return False
+
+
+def _openai_client_and_model() -> "tuple[Any, str] | None":
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    try:
+        from openai import OpenAI  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    model = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+    return OpenAI(api_key=api_key), model
+
+
+def build_title_generator_from_env() -> "Callable[[str, str], str] | None":
+    """Return an LLM title generator, or None when OpenAI is unavailable.
+
+    Independent of the rewriter flag: titles are cheap and improve the sidebar UX.
+    """
+    bundle = _openai_client_and_model()
+    if bundle is None:
+        return None
+    client, model = bundle
+    system = build_title_system_prompt()
+
+    def generate_title(question: str, answer: str) -> str:
+        user = f"First question:\n{question}\n\nAssistant answer (for context):\n{answer[:600]}"
+        response = client.chat.completions.create(
+            model=model,
+            temperature=0.3,
+            max_tokens=24,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        return (response.choices[0].message.content or "").strip()
+
+    return generate_title
 
 
 def build_openai_answer_rewriter_from_env() -> Callable[[str, str, list[Citation]], str] | None:

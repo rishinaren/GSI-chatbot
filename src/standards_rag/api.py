@@ -25,9 +25,14 @@ from standards_rag.env_bootstrap import (
     load_dotenv_files,
     sync_runtime_assets_from_s3,
 )
-from standards_rag.openai_answer import build_openai_answer_rewriter_from_env, openai_rewriter_enabled
+from standards_rag.openai_answer import (
+    build_openai_answer_rewriter_from_env,
+    build_title_generator_from_env,
+    openai_rewriter_enabled,
+)
 from standards_rag.pinecone_hybrid import attach_pinecone_index, pinecone_enabled_from_env
 from standards_rag.retrieval import InMemoryStandardsStore, resolve_document_pdf_path
+from standards_rag.video import build_video_store_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +55,7 @@ def _allowed_origins() -> list[str]:
 
 def create_app(store: InMemoryStandardsStore | None = None) -> Any:
     try:
-        from fastapi import FastAPI, HTTPException, Request
+        from fastapi import FastAPI, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.responses import FileResponse
     except ImportError as exc:
@@ -86,12 +91,24 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         else:
             logger.debug("OpenAI rewriter disabled (USE_OPENAI_ANSWER_REWRITER not set).")
 
+    try:
+        title_generator = build_title_generator_from_env()
+    except Exception as exc:  # noqa: BLE001 - titles are best-effort
+        title_generator = None
+        logger.warning("Title generator unavailable: %s", exc)
+
+    video_store = build_video_store_from_env()
+    if len(video_store):
+        logger.info("Loaded %d video transcripts", len(video_store))
+
     auth_config = load_auth_config_from_env()
     conversation_store = build_conversation_store_from_env()
     engine = StandardsRagEngine(
         store,
         answer_rewriter=answer_rewriter,
         conversation_store=conversation_store,
+        video_store=video_store,
+        title_generator=title_generator,
     )
     app = FastAPI(title="Standards RAG Chatbot", version="0.2.0")
     app.add_middleware(
@@ -122,7 +139,9 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             "ok": True,
             "documents": len(store.documents),
             "chunks": len(store.chunks),
+            "videos": len(video_store),
             "answer_rewriter_active": answer_rewriter is not None,
+            "title_generator_active": title_generator is not None,
             "openai_rewriter_flag": openai_rewriter_enabled(),
             "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY", "").strip()),
             "auth": auth_public_config(auth_config),
@@ -187,6 +206,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
                     "updated_at": record.updated_at,
                     "created_at": record.created_at,
                     "message_count": len(record.messages),
+                    "pinned": record.pinned,
                 }
                 for record in records
             ]
@@ -214,6 +234,20 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             raise HTTPException(status_code=404, detail="conversation not found")
         return record.to_dict()
 
+    @app.patch("/conversations/{conversation_id}")
+    def update_conversation(
+        conversation_id: str, payload: dict[str, Any], request: FastAPIRequest
+    ) -> dict[str, object]:
+        user = effective_user(request)
+        if "pinned" not in payload:
+            raise HTTPException(status_code=400, detail="pinned is required")
+        record = conversation_store.set_pinned(
+            user.user_id, conversation_id, bool(payload.get("pinned"))
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return record.to_dict()
+
     @app.delete("/conversations/{conversation_id}")
     def delete_conversation(conversation_id: str, request: FastAPIRequest) -> dict[str, bool]:
         user = effective_user(request)
@@ -221,6 +255,20 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         if not deleted:
             raise HTTPException(status_code=404, detail="conversation not found")
         return {"deleted": True}
+
+    @app.post("/videos/search")
+    def videos_search(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
+        effective_user(request)
+        query = str(payload.get("query", "")).strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="query is required")
+        top_k_raw = payload.get("top_k", 3)
+        try:
+            top_k = max(1, min(int(top_k_raw), 10))
+        except (TypeError, ValueError):
+            top_k = 3
+        matches = video_store.search(query, top_k=top_k, min_score=0.05)
+        return {"videos": [match.to_dict() for match in matches]}
 
     @app.post("/chat")
     def chat(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
@@ -239,7 +287,19 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
 
     @app.get("/documents/{document_id}/pdf")
     def document_pdf(document_id: str, request: FastAPIRequest) -> FileResponse:
-        effective_user(request)
+        # PDFs open via top-level browser navigation (a new tab), so no Authorization
+        # header is sent. Accept the access token as a query param for this route.
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            token = request.query_params.get("token") or request.query_params.get("access_token")
+            if token:
+                auth_header = f"Bearer {token}"
+        try:
+            user = authenticate_bearer_token(auth_header, config=auth_config)
+        except AuthError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        if user is None and auth_config.required and auth_config.enabled:
+            raise HTTPException(status_code=401, detail="Authentication required.")
 
         doc = store.documents.get(unquote(document_id))
         if doc is None:
