@@ -621,8 +621,27 @@ input {
 .header-tools {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 18px;
   flex-shrink: 0;
+}
+
+.header-logo-link {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: 8px;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.header-logo-link:hover {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
+.header-logo {
+  height: 38px;
+  width: auto;
+  display: block;
 }
 
 .unit-control {

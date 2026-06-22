@@ -337,7 +337,19 @@ function ChatApp() {
               <h1>GSI Chatbot</h1>
               <p className="chat-header-sub">Standards Q&amp;A — grounded in your ASTM &amp; ISO index</p>
             </div>
-            <div className="header-tools">{unitControl}</div>
+            <div className="header-tools">
+              {unitControl}
+              <a
+                className="header-logo-link"
+                href="https://geosynthetic-institute.org/"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Geosynthetic Institute website"
+                title="Geosynthetic Institute"
+              >
+                <img className="header-logo" src="/gsi-logo.png" alt="Geosynthetic Institute logo" />
+              </a>
+            </div>
           </div>
         </header>
 
