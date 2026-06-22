@@ -116,8 +116,9 @@ def build_title_system_prompt() -> str:
         "You generate a very short title for a saved research chat about geosynthetics and "
         "ASTM/ISO standards.\n"
         "Rules:\n"
-        "- 3 to 6 words, Title Case.\n"
-        "- No quotation marks, no trailing punctuation, no emojis.\n"
-        "- Capture the specific topic (e.g. a standard designation or test concept) when present.\n"
+        "- 2 to 4 words, Title Case. Keep it under 30 characters so it fits a narrow sidebar.\n"
+        "- Prefer the standard designation or core test concept alone (e.g. 'D4595 Wide-Width' "
+        "or 'GCL Permeability').\n"
+        "- No quotation marks, no trailing punctuation, no emojis, no filler words.\n"
         "- Output ONLY the title text, nothing else."
     )

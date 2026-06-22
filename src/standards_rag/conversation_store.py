@@ -477,9 +477,9 @@ class DynamoDBConversationStore(ConversationStore):
 
 def _title_from_question(question: str) -> str:
     cleaned = " ".join(question.split())
-    if len(cleaned) <= 72:
+    if len(cleaned) <= 40:
         return cleaned or "New chat"
-    return cleaned[:69].rstrip() + "..."
+    return cleaned[:37].rstrip() + "…"
 
 
 def _resolve_title(
@@ -496,7 +496,9 @@ def _resolve_title(
         if generated:
             cleaned = " ".join(generated.split()).strip("\"'")
             if cleaned:
-                return cleaned[:60].rstrip()
+                if len(cleaned) <= 42:
+                    return cleaned
+                return cleaned[:40].rstrip() + "…"
     return _title_from_question(question)
 
 

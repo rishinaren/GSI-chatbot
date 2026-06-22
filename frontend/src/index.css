@@ -586,6 +586,7 @@ input {
 
 /* ---------- Header ---------- */
 .chat-header {
+  position: relative;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg);
@@ -621,25 +622,28 @@ input {
 .header-tools {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 10px;
   flex-shrink: 0;
 }
 
 .header-logo-link {
+  position: absolute;
+  top: 50%;
+  right: 24px;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
-  flex-shrink: 0;
   border-radius: 8px;
   transition: opacity 0.14s ease, transform 0.14s ease;
 }
 
 .header-logo-link:hover {
-  opacity: 0.85;
-  transform: translateY(-1px);
+  opacity: 0.82;
+  transform: translateY(-50%) scale(1.03);
 }
 
 .header-logo {
-  height: 38px;
+  height: 46px;
   width: auto;
   display: block;
 }
@@ -1290,9 +1294,33 @@ input {
   cursor: not-allowed;
 }
 
+/* When the content column is no longer narrower than the header, reserve
+   room on the right so the Units control never slides under the logo. */
+@media (max-width: 880px) {
+  .chat-header-inner {
+    padding-right: 84px;
+  }
+
+  .header-logo {
+    height: 40px;
+  }
+}
+
 @media (max-width: 600px) {
   .chat-header {
     padding: 14px 16px;
+  }
+
+  .chat-header-inner {
+    padding-right: 70px;
+  }
+
+  .header-logo-link {
+    right: 16px;
+  }
+
+  .header-logo {
+    height: 34px;
   }
 
   .chat-content {
