@@ -14,6 +14,18 @@ export function getAccessToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+export function getUserEmail() {
+  const idToken = localStorage.getItem(ID_TOKEN_KEY);
+  if (!idToken) return "";
+  try {
+    const payload = idToken.split(".")[1];
+    const json = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    return json.email || "";
+  } catch {
+    return "";
+  }
+}
+
 export function clearSession() {
   clearStoredSession();
 }

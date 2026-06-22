@@ -8,18 +8,22 @@ import ChatSidebar from "./components/ChatSidebar";
 import LoginPanel from "./components/LoginPanel";
 import {
   ApiError,
+  assignConversationToProject,
   createConversation,
+  createProject,
   deleteConversation,
+  deleteProject,
   getConversation,
   listConversations,
+  listProjects,
   pinConversation,
+  renameProject,
   sendChat,
   withAuthedFileUrl,
 } from "./api";
-import { clearSession, loadAuthState, signOut } from "./auth";
+import { clearSession, getUserEmail, loadAuthState, signOut } from "./auth";
 
 const PAREN_NOT_AFTER_LATEX_OPENER = "(?<!\\\\(?:left|bigl|Bigl|biggl|Biggl|mleft))";
-const THEME_KEY = "gsi_theme";
 
 function normalizeAssistantContent(text) {
   let out = text;
@@ -57,23 +61,6 @@ function SendIcon() {
   );
 }
 
-function SunIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function MoonIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 function messagesFromConversation(record) {
   if (!record?.messages?.length) {
     return [];
@@ -90,6 +77,7 @@ function messagesFromConversation(record) {
 function ChatApp() {
   const [authState, setAuthState] = useState({ loading: true, authRequired: false, isLoggedIn: true });
   const [conversations, setConversations] = useState([]);
+  const [projects, setProjects] = useState([]);
   const [activeConversationId, setActiveConversationId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState("");
@@ -97,15 +85,10 @@ function ChatApp() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [followUpSuggestions, setFollowUpSuggestions] = useState([]);
-  const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || "light");
 
   const canSubmit = useMemo(() => question.trim().length > 0 && !isLoading, [question, isLoading]);
   const hasStarted = messages.length > 0;
-
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem(THEME_KEY, theme);
-  }, [theme]);
+  const showAuthModal = authState.authRequired && !authState.isLoggedIn;
 
   useEffect(() => {
     void bootstrap();
@@ -116,7 +99,7 @@ function ChatApp() {
       let state = await loadAuthState();
       if (state.isLoggedIn) {
         try {
-          await refreshConversations();
+          await refreshSidebar();
         } catch (refreshError) {
           if (refreshError instanceof ApiError && refreshError.status === 401) {
             clearSession();
@@ -143,10 +126,19 @@ function ChatApp() {
     setConversations(data.conversations ?? []);
   }
 
+  async function refreshProjects() {
+    const data = await listProjects();
+    setProjects(data.projects ?? []);
+  }
+
+  async function refreshSidebar() {
+    await Promise.all([refreshConversations(), refreshProjects()]);
+  }
+
   async function handleSignedIn() {
     const state = await loadAuthState();
     setAuthState({ loading: false, ...state });
-    await refreshConversations();
+    await refreshSidebar();
   }
 
   function startNewChat() {
@@ -171,7 +163,7 @@ function ChatApp() {
     if (conversationId === activeConversationId) {
       startNewChat();
     }
-    await refreshConversations();
+    await refreshSidebar();
   }
 
   async function handleTogglePin(conversationId, pinned) {
@@ -186,6 +178,52 @@ function ChatApp() {
     } catch (pinError) {
       setError(pinError instanceof Error ? pinError.message : "Could not update pin.");
       await refreshConversations();
+    }
+  }
+
+  async function handleCreateProject(name) {
+    try {
+      const project = await createProject(name);
+      await refreshProjects();
+      return project;
+    } catch (projectError) {
+      setError(projectError instanceof Error ? projectError.message : "Could not create project.");
+      return null;
+    }
+  }
+
+  async function handleRenameProject(projectId, name) {
+    try {
+      await renameProject(projectId, name);
+      await refreshProjects();
+    } catch (projectError) {
+      setError(projectError instanceof Error ? projectError.message : "Could not rename project.");
+    }
+  }
+
+  async function handleDeleteProject(projectId) {
+    try {
+      await deleteProject(projectId);
+      await refreshSidebar();
+    } catch (projectError) {
+      setError(projectError instanceof Error ? projectError.message : "Could not delete project.");
+    }
+  }
+
+  async function handleAssignToProject(conversationId, projectId) {
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.conversation_id === conversationId
+          ? { ...conversation, project_id: projectId }
+          : conversation,
+      ),
+    );
+    try {
+      await assignConversationToProject(conversationId, projectId);
+      await refreshSidebar();
+    } catch (assignError) {
+      setError(assignError instanceof Error ? assignError.message : "Could not update project.");
+      await refreshSidebar();
     }
   }
 
@@ -249,11 +287,7 @@ function ChatApp() {
   }
 
   if (authState.loading) {
-    return <div className="app-loading">Loading...</div>;
-  }
-
-  if (authState.authRequired && !authState.isLoggedIn) {
-    return <LoginPanel onSignedIn={handleSignedIn} connectionError={error} />;
+    return <div className="app-loading">Loading…</div>;
   }
 
   const composerProps = { question, setQuestion, canSubmit, onSubmit, onKeyDown };
@@ -278,11 +312,22 @@ function ChatApp() {
     <div className="app-shell">
       <ChatSidebar
         conversations={conversations}
+        projects={projects}
         activeConversationId={activeConversationId}
         onSelect={handleSelectConversation}
         onNewChat={startNewChat}
         onDelete={handleDeleteConversation}
         onTogglePin={handleTogglePin}
+        onCreateProject={handleCreateProject}
+        onRenameProject={handleRenameProject}
+        onDeleteProject={handleDeleteProject}
+        onAssignToProject={handleAssignToProject}
+        userEmail={authState.configured ? getUserEmail() : ""}
+        canSignOut={Boolean(authState.configured)}
+        onSignOut={() => {
+          signOut();
+          window.location.reload();
+        }}
       />
 
       <div className="app-main">
@@ -292,30 +337,7 @@ function ChatApp() {
               <h1>GSI Chatbot</h1>
               <p className="chat-header-sub">Standards Q&amp;A — grounded in your ASTM &amp; ISO index</p>
             </div>
-            <div className="header-tools">
-              {unitControl}
-              <button
-                type="button"
-                className="icon-toggle"
-                onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-                aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-                title={theme === "dark" ? "Light mode" : "Dark mode"}
-              >
-                {theme === "dark" ? <SunIcon /> : <MoonIcon />}
-              </button>
-              {authState.configured ? (
-                <button
-                  type="button"
-                  className="sign-out-btn"
-                  onClick={() => {
-                    signOut();
-                    window.location.reload();
-                  }}
-                >
-                  Sign out
-                </button>
-              ) : null}
-            </div>
+            <div className="header-tools">{unitControl}</div>
           </div>
         </header>
 
@@ -332,6 +354,8 @@ function ChatApp() {
           <EmptyState error={error} composerProps={composerProps} />
         )}
       </div>
+
+      {showAuthModal ? <LoginPanel onSignedIn={handleSignedIn} connectionError={error} /> : null}
     </div>
   );
 }
@@ -358,7 +382,6 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
         <div className="message-scroll">
           {messages.map((message) => (
             <div key={message.id} className={`msg-row ${message.role}`}>
-              <ChatAvatar role={message.role} />
               <div className={`bubble ${message.role === "user" ? "user" : "bot"}`}>
                 {message.role === "assistant" ? (
                   <div className="markdown-body">
@@ -421,7 +444,6 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
 
           {isLoading && (
             <div className="typing-row" aria-live="polite" aria-busy="true">
-              <ChatAvatar role="assistant" />
               <div className="typing-dots">
                 <span />
                 <span />
@@ -483,14 +505,6 @@ function VideoEmbed({ video }) {
       <a className="video-caption" href={video.youtube_url} target="_blank" rel="noopener noreferrer">
         {video.title}
       </a>
-    </div>
-  );
-}
-
-function ChatAvatar({ role }) {
-  return (
-    <div className={`avatar ${role === "user" ? "user" : ""}`} aria-hidden>
-      {role === "user" ? "You" : "AI"}
     </div>
   );
 }

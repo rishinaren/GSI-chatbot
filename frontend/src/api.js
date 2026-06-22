@@ -133,6 +133,35 @@ export function pinConversation(conversationId, pinned) {
   });
 }
 
+export function assignConversationToProject(conversationId, projectId) {
+  return request(`/conversations/${conversationId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ project_id: projectId }),
+  });
+}
+
+export function listProjects() {
+  return request("/projects");
+}
+
+export function createProject(name) {
+  return request("/projects", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function renameProject(projectId, name) {
+  return request(`/projects/${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteProject(projectId) {
+  return request(`/projects/${projectId}`, { method: "DELETE" });
+}
+
 export function searchVideos(query, topK = 3) {
   return request("/videos/search", {
     method: "POST",

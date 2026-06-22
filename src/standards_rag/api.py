@@ -207,6 +207,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
                     "created_at": record.created_at,
                     "message_count": len(record.messages),
                     "pinned": record.pinned,
+                    "project_id": record.project_id,
                 }
                 for record in records
             ]
@@ -239,13 +240,29 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         conversation_id: str, payload: dict[str, Any], request: FastAPIRequest
     ) -> dict[str, object]:
         user = effective_user(request)
-        if "pinned" not in payload:
-            raise HTTPException(status_code=400, detail="pinned is required")
-        record = conversation_store.set_pinned(
-            user.user_id, conversation_id, bool(payload.get("pinned"))
-        )
-        if record is None:
-            raise HTTPException(status_code=404, detail="conversation not found")
+        if "pinned" not in payload and "project_id" not in payload:
+            raise HTTPException(status_code=400, detail="pinned or project_id is required")
+
+        record = None
+        if "pinned" in payload:
+            record = conversation_store.set_pinned(
+                user.user_id, conversation_id, bool(payload.get("pinned"))
+            )
+            if record is None:
+                raise HTTPException(status_code=404, detail="conversation not found")
+
+        if "project_id" in payload:
+            raw_project = payload.get("project_id")
+            project_id = str(raw_project).strip() if raw_project else None
+            try:
+                record = conversation_store.set_project(
+                    user.user_id, conversation_id, project_id or None
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="project not found") from exc
+            if record is None:
+                raise HTTPException(status_code=404, detail="conversation not found")
+
         return record.to_dict()
 
     @app.delete("/conversations/{conversation_id}")
@@ -254,6 +271,58 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         deleted = conversation_store.delete_conversation(user.user_id, conversation_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="conversation not found")
+        return {"deleted": True}
+
+    @app.get("/projects")
+    def list_projects(request: FastAPIRequest) -> dict[str, object]:
+        user = effective_user(request)
+        projects = conversation_store.list_projects(user.user_id)
+        conversations = conversation_store.list_conversations(user.user_id, limit=500)
+        counts: dict[str, int] = {}
+        for conversation in conversations:
+            if conversation.project_id:
+                counts[conversation.project_id] = counts.get(conversation.project_id, 0) + 1
+        return {
+            "projects": [
+                {
+                    "project_id": project.project_id,
+                    "name": project.name,
+                    "created_at": project.created_at,
+                    "updated_at": project.updated_at,
+                    "conversation_count": counts.get(project.project_id, 0),
+                }
+                for project in projects
+            ]
+        }
+
+    @app.post("/projects")
+    def create_project(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
+        user = effective_user(request)
+        name = str(payload.get("name", "")).strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        project = conversation_store.create_project(user.user_id, name=name)
+        return project.to_dict()
+
+    @app.patch("/projects/{project_id}")
+    def rename_project(
+        project_id: str, payload: dict[str, Any], request: FastAPIRequest
+    ) -> dict[str, object]:
+        user = effective_user(request)
+        name = str(payload.get("name", "")).strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        project = conversation_store.rename_project(user.user_id, project_id, name)
+        if project is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        return project.to_dict()
+
+    @app.delete("/projects/{project_id}")
+    def delete_project(project_id: str, request: FastAPIRequest) -> dict[str, bool]:
+        user = effective_user(request)
+        deleted = conversation_store.delete_project(user.user_id, project_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="project not found")
         return {"deleted": True}
 
     @app.post("/videos/search")

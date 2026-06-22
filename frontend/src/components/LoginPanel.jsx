@@ -193,7 +193,7 @@ export default function LoginPanel({ onSignedIn, connectionError = "" }) {
   }
 
   const title =
-    mode === "signup" ? "Create your account" : mode === "confirm" ? "Verify your email" : "GSI Chatbot";
+    mode === "signup" ? "Create your account" : mode === "confirm" ? "Verify your email" : "Welcome back";
   const subtitle =
     mode === "signup"
       ? "Sign up to access the standards research assistant."
@@ -202,10 +202,11 @@ export default function LoginPanel({ onSignedIn, connectionError = "" }) {
         : "Sign in to access the standards research assistant.";
 
   return (
-    <div className="login-panel">
+    <div className="login-panel" role="dialog" aria-modal="true" aria-label="Sign in">
       <div className="login-card">
+        <p className="login-brand">GSI Chatbot</p>
         <h1>{title}</h1>
-        <p>{subtitle}</p>
+        <p className="login-subtitle">{subtitle}</p>
         {connectionError ? <div className="login-error">{connectionError}</div> : null}
         {success ? <div className="login-success">{success}</div> : null}
 
