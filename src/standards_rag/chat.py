@@ -1014,7 +1014,12 @@ class StandardsRagEngine:
         # Lower the bar (and always surface the top hit) when a video is requested.
         min_score = 0.03 if explicit else 0.18
         top_k = 2 if explicit else 1
-        matches = self.video_store.search(question, top_k=top_k, min_score=min_score)
+        # Tie video relevance to the standards we actually cited, not just the raw
+        # question, so the surfaced video aligns with the answer.
+        cited_standards = {c.standard_id for c in response.citations if c.standard_id}
+        matches = self.video_store.search(
+            question, top_k=top_k, min_score=min_score, cited_standards=cited_standards
+        )
         if not matches:
             return response
 

@@ -59,6 +59,43 @@ def video_request_explicit(question: str) -> bool:
     return any(term in lowered for term in _EXPLICIT_VIDEO_TERMS)
 
 
+# Designations carried in a video title, e.g. "ASTM D4595, D6637 …" or "GRI GM13r".
+_ASTM_DESIG_RE = re.compile(r"\b(?:ASTM[-\s]?)?(D\s?-?\s?\d{3,5}[A-Za-z]?)\b", re.IGNORECASE)
+_GRI_DESIG_RE = re.compile(
+    r"\b(?:GRI[-\s]?)?(G(?:CL|[CGMNST])\s?-?\s?\d+[A-Za-z]?)\b", re.IGNORECASE
+)
+
+
+def parse_standard_ids_from_title(title: str) -> tuple[str, ...]:
+    """Extract ASTM/GRI designations from a video title, normalized (``D4491``, ``GT12``)."""
+    found: list[str] = []
+    for regex in (_ASTM_DESIG_RE, _GRI_DESIG_RE):
+        for match in regex.finditer(title or ""):
+            norm = re.sub(r"[\s\-]", "", match.group(1)).upper()
+            if norm not in found:
+                found.append(norm)
+    return tuple(found)
+
+
+def _designation_key(value: str) -> str:
+    """Comparable core of a designation: lowercased alnum with the issuing body stripped."""
+    compact = re.sub(r"[^a-z0-9]", "", (value or "").lower())
+    return re.sub(r"^(gri|astm|iso)", "", compact)
+
+
+def standards_overlap(video_standards: tuple[str, ...], cited: set[str]) -> bool:
+    """True if any video designation prefix-matches any cited standard id (year-agnostic)."""
+    cited_keys = [_designation_key(c) for c in cited]
+    for standard in video_standards:
+        key = _designation_key(standard)
+        if len(key) < 3:
+            continue
+        for cited_key in cited_keys:
+            if len(cited_key) >= 3 and (key.startswith(cited_key) or cited_key.startswith(key)):
+                return True
+    return False
+
+
 @dataclass(frozen=True)
 class VideoTranscript:
     """A single video's transcript plus enough metadata to embed and cite it."""
@@ -113,14 +150,19 @@ class VideoTranscript:
             or str(data.get("youtube_id") or "")
         )
         raw_id = str(data.get("video_id") or youtube_id or data.get("title") or "")
+        title = str(data.get("title") or "Untitled video")
+        # Merge any hand-tagged standards with designations parsed from the title,
+        # so tagging scales to the whole channel without manual upkeep.
+        explicit = [str(s) for s in data.get("standards", []) if str(s).strip()]
+        standards = tuple(dict.fromkeys(explicit + list(parse_standard_ids_from_title(title))))
         return cls(
             video_id=raw_id,
             youtube_id=youtube_id,
-            title=str(data.get("title") or "Untitled video"),
+            title=title,
             transcript=str(data.get("transcript") or ""),
             description=str(data.get("description") or ""),
             channel=str(data.get("channel") or ""),
-            standards=tuple(str(s) for s in data.get("standards", []) if str(s).strip()),
+            standards=standards,
             url=data.get("url"),
         )
 
@@ -164,26 +206,32 @@ class VideoTranscriptStore:
         *,
         top_k: int = 3,
         min_score: float = 0.12,
+        cited_standards: set[str] | None = None,
     ) -> list[VideoMatch]:
+        cited = cited_standards or set()
         query_terms = set(_tokens(query))
-        if not query_terms or not self.videos:
+        if not query_terms and not cited:
+            return []
+        if not self.videos:
             return []
 
+        query_compact = re.sub(r"[^a-z0-9]+", "", query.lower())
         scored: list[VideoMatch] = []
         for video in self.videos.values():
             haystack_terms = set(_tokens(video.haystack()))
-            if not haystack_terms:
-                continue
             overlap = query_terms & haystack_terms
-            score = len(overlap) / len(query_terms)
+            score = len(overlap) / len(query_terms) if query_terms else 0.0
 
-            # Boost when the question names a standard the video covers.
-            query_compact = re.sub(r"[^a-z0-9]+", "", query.lower())
-            for standard in video.standards:
-                std_compact = re.sub(r"[^a-z0-9]+", "", standard.lower())
-                if std_compact and std_compact in query_compact:
-                    score += 0.5
-                    break
+            # Strongest signal: the video covers a standard we actually cited.
+            if cited and standards_overlap(video.standards, cited):
+                score += 1.0
+            else:
+                # Next best: the question text itself names a standard the video covers.
+                for standard in video.standards:
+                    std_compact = re.sub(r"[^a-z0-9]+", "", standard.lower())
+                    if std_compact and std_compact in query_compact:
+                        score += 0.5
+                        break
 
             if score >= min_score:
                 scored.append(VideoMatch(video=video, score=score))
