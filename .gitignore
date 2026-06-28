@@ -16,3 +16,8 @@ gsi docs/
 og_image-removebg.png
 frontend/node_modules/
 frontend/dist/
+# YouTube OAuth credentials / tokens (owner access — never commit)
+client_secret*.json
+*oauth*.json
+youtube_token.json
+.youtube_token.json
