@@ -1332,3 +1332,36 @@ input {
     max-width: 88%;
   }
 }
+
+/* Tier-2 video suggestion (ask before showing) */
+.video-suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.video-suggestion-text {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.video-suggestion-text strong {
+  color: var(--text);
+  font-weight: 500;
+}
+.video-suggestion-btn {
+  flex: none;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  color: var(--bg);
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.video-suggestion-btn:hover {
+  background: var(--accent-hover);
+}

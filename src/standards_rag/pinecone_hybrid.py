@@ -18,6 +18,9 @@ from standards_rag.retrieval import (
 _DEFAULT_EMBED_MODEL = "llama-text-embed-v2"
 # Max inputs per inference.embed() request for llama-text-embed-v2.
 _EMBED_INPUT_LIMIT = 96
+# Isolated namespace for video-transcript vectors so they never pollute standards
+# chunk retrieval (which uses the default namespace).
+VIDEO_NAMESPACE = "videos"
 
 
 def normalize_index_host(host: str) -> str:
@@ -144,6 +147,30 @@ class PineconeHybridStore(InMemoryStandardsStore):
 
         for _, chunk_list in flattened:
             self.upsert_embeddings(chunk_list)
+
+    def upsert_video_chunks(self, vectors: list[dict[str, object]]) -> None:
+        """Upsert pre-built video-transcript vectors into the isolated video namespace."""
+        for start in range(0, len(vectors), self.config.batch_size):
+            self._index.upsert(vectors=vectors[start : start + self.config.batch_size], namespace=VIDEO_NAMESPACE)
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        """Public wrapper so ingest scripts can embed transcript chunks."""
+        return self._embed_passages(texts)
+
+    def search_video_transcripts(self, query: str, *, top_k: int = 15) -> list[tuple[str, float]]:
+        """Query the video namespace; return (video_id, chunk_score) for each hit."""
+        query_response = self._index.query(
+            vector=self._embed_query(query),
+            top_k=top_k,
+            include_metadata=True,
+            namespace=VIDEO_NAMESPACE,
+        )
+        hits: list[tuple[str, float]] = []
+        for match in getattr(query_response, "matches", None) or []:
+            video_id = (getattr(match, "metadata", None) or {}).get("video_id")
+            if video_id:
+                hits.append((str(video_id), float(match.score or 0.0)))
+        return hits
 
     def search(
         self,

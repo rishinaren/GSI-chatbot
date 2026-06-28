@@ -71,6 +71,7 @@ function messagesFromConversation(record) {
     text: message.text,
     citations: message.citations ?? [],
     videos: message.videos ?? [],
+    videoSuggestions: message.video_suggestions ?? [],
   }));
 }
 
@@ -262,6 +263,7 @@ function ChatApp() {
           text: data.answer,
           citations: data.citations ?? [],
           videos: data.videos ?? [],
+          videoSuggestions: data.video_suggestions ?? [],
           needsClarification: data.needs_clarification,
         },
       ]);
@@ -414,6 +416,14 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
                   </div>
                 )}
 
+                {message.videoSuggestions?.length > 0 && (
+                  <div className="video-block">
+                    {message.videoSuggestions.map((video) => (
+                      <VideoSuggestion key={video.video_id || video.youtube_id} video={video} />
+                    ))}
+                  </div>
+                )}
+
                 {message.citations?.length > 0 && (
                   <div className="meta-block">
                     <div className="meta-title">Citations</div>
@@ -517,6 +527,25 @@ function VideoEmbed({ video }) {
       <a className="video-caption" href={video.youtube_url} target="_blank" rel="noopener noreferrer">
         {video.title}
       </a>
+    </div>
+  );
+}
+
+// Tier-2 (semantic-only) match: the video isn't directly about a cited standard,
+// so we ask before showing it rather than auto-embedding.
+function VideoSuggestion({ video }) {
+  const [shown, setShown] = useState(false);
+  if (shown) {
+    return <VideoEmbed video={video} />;
+  }
+  return (
+    <div className="video-suggestion">
+      <span className="video-suggestion-text">
+        A related video may help: <strong>{video.title}</strong>
+      </span>
+      <button type="button" className="video-suggestion-btn" onClick={() => setShown(true)}>
+        Show video
+      </button>
     </div>
   );
 }

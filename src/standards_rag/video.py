@@ -96,6 +96,34 @@ def standards_overlap(video_standards: tuple[str, ...], cited: set[str]) -> bool
     return False
 
 
+# Precision-first gate for the *semantic* (transcript) video signal. A suggestion
+# fires only on a strongly sustained match, so a passing topical mention never
+# surfaces. Tuned on the 24-video set (see scripts/ingest_video_transcripts.py).
+_SEM_BEST_FLOOR = 0.50      # one chunk this strong is enough
+_SEM_STRONG_SCORE = 0.42    # "strong chunk" cutoff for the density signal
+_SEM_STRONG_COUNT = 3       # this many strong chunks = sustained relevance
+
+
+def gate_semantic_suggestions(
+    hits: list[tuple[str, float]], exclude_ids: set[str], *, top: int = 1
+) -> list[str]:
+    """From (video_id, chunk_score) hits, return video_ids that clear the precision gate."""
+    best: dict[str, float] = {}
+    strong: dict[str, int] = {}
+    for video_id, score in hits:
+        best[video_id] = max(best.get(video_id, 0.0), score)
+        if score >= _SEM_STRONG_SCORE:
+            strong[video_id] = strong.get(video_id, 0) + 1
+    qualified = [
+        (vid, best[vid])
+        for vid in best
+        if vid not in exclude_ids
+        and (best[vid] >= _SEM_BEST_FLOOR or strong.get(vid, 0) >= _SEM_STRONG_COUNT)
+    ]
+    qualified.sort(key=lambda item: item[1], reverse=True)
+    return [vid for vid, _ in qualified[:top]]
+
+
 @dataclass(frozen=True)
 class VideoTranscript:
     """A single video's transcript plus enough metadata to embed and cite it."""

@@ -55,6 +55,7 @@ class ChatResponse:
     needs_clarification: bool = False
     follow_up_suggestions: list[str] = field(default_factory=list)
     videos: list[dict[str, object]] = field(default_factory=list)
+    video_suggestions: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -64,6 +65,7 @@ class ChatResponse:
             "needs_clarification": self.needs_clarification,
             "follow_up_suggestions": self.follow_up_suggestions,
             "videos": self.videos,
+            "video_suggestions": self.video_suggestions,
         }
 
 
@@ -1002,30 +1004,55 @@ class StandardsRagEngine:
         return response
 
     def _attach_videos(self, question: str, response: ChatResponse) -> ChatResponse:
-        """Cross-reference the question/answer with the video transcript store."""
+        """Surface videos in two tiers:
+
+        - **Tier 1 (shown inline):** the video directly covers a standard the answer
+          cited or the question named — confident, so we show it.
+        - **Tier 2 (ask first):** no direct standard, but the transcript strongly
+          matches the question semantically — tentative, so the UI asks before showing.
+        """
         if self.video_store is None or len(self.video_store) == 0:
             return response
         if response.needs_clarification:
             return response
 
-        from standards_rag.video import video_request_explicit
-
-        explicit = video_request_explicit(question)
-        # Lower the bar (and always surface the top hit) when a video is requested.
-        min_score = 0.03 if explicit else 0.18
-        top_k = 2 if explicit else 1
-        # Tie video relevance to the standards we actually cited, not just the raw
-        # question, so the surfaced video aligns with the answer.
-        cited_standards = {c.standard_id for c in response.citations if c.standard_id}
-        matches = self.video_store.search(
-            question, top_k=top_k, min_score=min_score, cited_standards=cited_standards
-        )
-        if not matches:
-            return response
-
         from dataclasses import replace
 
-        return replace(response, videos=[match.to_dict() for match in matches])
+        from standards_rag.video import (
+            VideoMatch,
+            gate_semantic_suggestions,
+            parse_standard_ids_from_title,
+            standards_overlap,
+        )
+
+        # "Direct" standards: cited in the answer or named in the question text.
+        direct = {c.standard_id for c in response.citations if c.standard_id}
+        direct |= set(parse_standard_ids_from_title(question))
+
+        tier1 = [
+            video
+            for video in self.video_store.videos.values()
+            if video.standards and standards_overlap(video.standards, direct)
+        ][:2]
+        shown_ids = {video.video_id for video in tier1}
+        videos = [VideoMatch(video=video, score=2.0).to_dict() for video in tier1]
+
+        # Tier 2: precision-gated semantic suggestions (needs the Pinecone video namespace).
+        suggestions: list[dict[str, object]] = []
+        searcher = getattr(self.store, "search_video_transcripts", None)
+        if callable(searcher):
+            try:
+                hits = searcher(question, top_k=20)
+            except Exception:  # noqa: BLE001 - video search must never break an answer
+                hits = []
+            for video_id in gate_semantic_suggestions(hits, exclude_ids=shown_ids):
+                video = self.video_store.videos.get(video_id)
+                if video is not None:
+                    suggestions.append(VideoMatch(video=video, score=1.0).to_dict())
+
+        if not videos and not suggestions:
+            return response
+        return replace(response, videos=videos, video_suggestions=suggestions)
 
     def _hydrate_history_from_store(self, user_id: str, conversation_id: str) -> None:
         if conversation_id in self._history or not self.conversation_store:
