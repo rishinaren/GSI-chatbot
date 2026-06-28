@@ -1,6 +1,7 @@
 .DS_Store
 .env
 HANDOFF.md
+memory.md
 .venv/
 __pycache__/
 *.py[cod]
