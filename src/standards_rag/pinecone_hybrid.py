@@ -16,6 +16,8 @@ from standards_rag.retrieval import (
 )
 
 _DEFAULT_EMBED_MODEL = "llama-text-embed-v2"
+# Max inputs per inference.embed() request for llama-text-embed-v2.
+_EMBED_INPUT_LIMIT = 96
 
 
 def normalize_index_host(host: str) -> str:
@@ -217,12 +219,16 @@ class PineconeHybridStore(InMemoryStandardsStore):
         )
 
     def _embed_passages(self, texts: list[str]) -> list[list[float]]:
-        response = self._client.inference.embed(
-            model=self.config.embed_model,
-            inputs=texts,
-            parameters=_embed_parameters("passage"),
-        )
-        return _extract_embedding_vectors(response)
+        # llama-text-embed-v2 caps inputs at 96 per request, so embed in batches.
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), _EMBED_INPUT_LIMIT):
+            response = self._client.inference.embed(
+                model=self.config.embed_model,
+                inputs=texts[start : start + _EMBED_INPUT_LIMIT],
+                parameters=_embed_parameters("passage"),
+            )
+            vectors.extend(_extract_embedding_vectors(response))
+        return vectors
 
     def _embed_query(self, text: str) -> list[float]:
         response = self._client.inference.embed(

@@ -42,6 +42,7 @@ FAMILY_NAME = {
     "GT": "Geotextile",
     "GN": "Geonet",
     "GC": "Geocomposite",
+    "GCL": "Geosynthetic Clay Liner",
     "GS": "Geosynthetic",
 }
 
@@ -51,6 +52,46 @@ _TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 _QUOTE_RE = re.compile(r'[“"]([^”"]{10,160})[”"]')
+
+# Robust extractor: a GRI cover page reads
+#   GRI <Type> <code>*  /  Standard <Type> for[:]  /  <title…>  /  This … was developed by the Geosynthetic …
+# so the title is the text between the "Standard <Type> [for]" line and that boilerplate
+# (or the "Scope" heading). Anchoring on the lead-in skips the header line.
+_TYPE_RE = re.compile(r"Standard\s+(Test\s+Method|Practice|Specification|Guide|of\s+Practice)\b", re.IGNORECASE)
+_LEADIN_RE = re.compile(r'\s*(for\b|[:“"”])')
+_DEVELOPED_RE = re.compile(r"This\s+[\w\s]{0,40}?was\s+developed\s+by\s+the\s+Geosynthetic", re.IGNORECASE)
+_SCOPE_RE = re.compile(r"\n\s*1\.?\s*Scope\b|\n\s*Scope\b", re.IGNORECASE)
+_QUOTE_CHARS = "“”\"‘’'"
+
+
+def extract_gri_title(raw_text: str) -> str | None:
+    """Pull a clean ``Standard <Type> for "<title>"`` string from a GRI cover page."""
+    text = raw_text[:2200]
+    intro = next((m for m in _TYPE_RE.finditer(text) if _LEADIN_RE.match(text, m.end())), None)
+    if intro is None:
+        return None
+    grp = intro.group(1)
+    phrase = "Standard Practice" if grp.lower() == "of practice" else "Standard " + " ".join(grp.split()).title()
+    start = intro.end()
+    consumed = re.match(r"\s*for\s*:?", text[start:], re.IGNORECASE)
+    if consumed:
+        start += consumed.end()
+    ends = [e.start() for e in (_DEVELOPED_RE.search(text, start), _SCOPE_RE.search(text, start)) if e]
+    end = min(ends) if ends else start + 300
+    inner = re.sub(r"\s+", " ", text[start:end]).strip()
+    # strip a trailing footnote / service-mark that trails the closing quote
+    #   ...Efficiency"**   ...Method”1   ...Barriers” SM
+    inner = re.sub(r'([”“"’\'])\s*(?:SM|TM|[*¹²³™®\d]+)\s*$', r"\1", inner).strip()
+    # normalize curly quotes to straight, then peel one wrapping pair
+    inner = inner.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'").strip()
+    if inner[:1] == '"' and inner[-1:] == '"':
+        inner = inner[1:-1].strip()
+    inner = inner.rstrip(".,;:").strip()
+    # any remaining interior double quotes become single quotes for a clean nested label
+    inner = inner.replace('"', "'").strip()
+    if len(inner) < 8 or inner[:1].isdigit():
+        return None
+    return f'{phrase} for "{inner[0].upper()}{inner[1:]}"'
 
 
 def gri_code(stem: str) -> tuple[str, str]:
@@ -63,6 +104,10 @@ def gri_code(stem: str) -> tuple[str, str]:
 
 
 def clean_title(raw_text: str, inferred: str, family: str, standard_id: str) -> str:
+    robust = extract_gri_title(raw_text)
+    if robust:
+        return robust
+
     text = raw_text[:3500]
     match = _TITLE_RE.search(text)
     if match:
