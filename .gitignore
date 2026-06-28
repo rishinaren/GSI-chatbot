@@ -2,6 +2,7 @@
 .env
 HANDOFF.md
 memory.md
+CLAUDE.md
 .venv/
 __pycache__/
 *.py[cod]
