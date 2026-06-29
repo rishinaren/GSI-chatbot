@@ -10,6 +10,7 @@ from standards_rag.answer_prompts import (
     build_rewriter_system_prompt,
     build_title_system_prompt,
     is_comparison_question,
+    sanitize_math_markdown,
 )
 from standards_rag.models import Citation
 
@@ -104,6 +105,6 @@ def build_openai_answer_rewriter_from_env() -> Callable[[str, str, list[Citation
         cleaned = content.strip()
         if not cleaned:
             raise RuntimeError("OpenAI returned an empty answer.")
-        return cleaned
+        return sanitize_math_markdown(cleaned)
 
     return rewrite

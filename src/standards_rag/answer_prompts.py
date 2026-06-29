@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 CLAIM_LEVEL_GROUNDING = """
 You are answering questions using retrieved ASTM standard excerpts.
 For every factual claim about applicability, exclusions, scope, limitations, calculations, or interpretation,
@@ -56,10 +58,56 @@ MATH_AND_FORMAT_RULES = """
   - Inline: $...$ (example: $v$, $A$, $n = \\left(\\frac{t_v}{A}\\right)^2$)
   - Display (standalone equation lines): $$...$$
 - Never write \\left$ or \\right$; use \\left( ... \\right) and keep the whole expression inside one $...$ pair.
+- Put each COMPLETE equation inside exactly ONE delimiter pair; NEVER place a $ inside another expression. Bad: $$\\frac{A_t}{\\ln$S$ \\cdot $h_1-h_2$}$$  Good: $$k_T = a_T \\cdot \\frac{A_t}{\\ln(S)\\,(h_1 - h_2)}$$
 - Do not wrap math in plain parentheses like ( v ) or ( n = \\frac{a}{b} ); use $...$ instead.
 - Do not rearrange equations unless the rearrangement is explicitly supported by the cited evidence text.
 - Do not add a 'Sources:' or bibliography section; the app shows full citations separately.
 """
+
+
+_MATH_CMD_RE = re.compile(
+    r"\\(?:d?frac|cdot|times|div|sqrt|ln|log|sum|int|left|right|partial|"
+    r"leq|geq|le|ge|neq|approx|pm|sigma|alpha|beta|gamma|Delta|theta|mu|rho)\b"
+)
+
+
+def _is_bare_equation_line(line: str) -> bool:
+    """True for a standalone-equation line (few prose words) that uses LaTeX math."""
+    if not _MATH_CMD_RE.search(line):
+        return False
+    prose = _MATH_CMD_RE.sub(" ", line)
+    prose = re.sub(r"\\[a-zA-Z]+", " ", prose).replace("$", " ")
+    prose = re.sub(r"[^A-Za-z ]+", " ", prose)
+    long_words = [w for w in prose.split() if len(w) >= 4]
+    return len(long_words) <= 2
+
+
+def sanitize_math_markdown(text: str) -> str:
+    """Repair common LLM math-delimiter mistakes so KaTeX renders cleanly.
+
+    Converts ``\\( \\)``/``\\[ \\]`` to ``$``/``$$``, and for a standalone equation
+    line that nested or dropped ``$`` delimiters, strips the stray ``$`` and wraps the
+    whole expression once in ``$$ ... $$``. Fixes the failure where an answer printed
+    raw LaTeX like ``\\frac{A_t}{\\ln$S$ \\cdot $h_1-h_2$}``. Prose lines with valid
+    inline ``$...$`` math are left untouched.
+    """
+    text = re.sub(r"\\\((.+?)\\\)", lambda m: f"${m.group(1).strip()}$", text, flags=re.S)
+    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"$$ {m.group(1).strip()} $$", text, flags=re.S)
+    fixed: list[str] = []
+    in_code = False
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            fixed.append(line)
+        elif in_code or not stripped or stripped.startswith("$$"):
+            fixed.append(line)
+        elif _is_bare_equation_line(stripped):
+            body = re.sub(r"\s+", " ", stripped.replace("$", " ")).strip()
+            fixed.append(f"$$ {body} $$")
+        else:
+            fixed.append(line)
+    return "\n".join(fixed)
 
 
 def is_comparison_question(question: str) -> bool:
