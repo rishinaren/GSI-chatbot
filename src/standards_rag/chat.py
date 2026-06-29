@@ -1004,12 +1004,16 @@ class StandardsRagEngine:
         return response
 
     def _attach_videos(self, question: str, response: ChatResponse) -> ChatResponse:
-        """Surface videos in two tiers:
+        """Surface videos in two tiers, precision-first:
 
-        - **Tier 1 (shown inline):** the video directly covers a standard the answer
-          cited or the question named — confident, so we show it.
-        - **Tier 2 (ask first):** no direct standard, but the transcript strongly
-          matches the question semantically — tentative, so the UI asks before showing.
+        - **Tier 1 (inline):** of the videos covering a standard the answer cited or
+          the question named, the single *most relevant* one — ranked by an exact
+          ASTM test-method match first, then transcript similarity. (Broad GRI family
+          tags like GT12/GT13/GM13/GCL3 cover many tests, so we rank *within* the
+          family and show only the best, instead of flooding with every video tagged
+          to that umbrella spec.)
+        - **Tier 2 (ask-first):** a video with no shared standard but a strong
+          transcript match — a tentative "Show video" suggestion.
         """
         if self.video_store is None or len(self.video_store) == 0:
             return response
@@ -1029,26 +1033,47 @@ class StandardsRagEngine:
         direct = {c.standard_id for c in response.citations if c.standard_id}
         direct |= set(parse_standard_ids_from_title(question))
 
-        tier1 = [
-            video
-            for video in self.video_store.videos.values()
-            if video.standards and standards_overlap(video.standards, direct)
-        ][:2]
-        shown_ids = {video.video_id for video in tier1}
-        videos = [VideoMatch(video=video, score=2.0).to_dict() for video in tier1]
-
-        # Tier 2: precision-gated semantic suggestions (needs the Pinecone video namespace).
-        suggestions: list[dict[str, object]] = []
+        # Transcript-similarity scores (also drive the tier-2 gate).
+        hits: list[tuple[str, float]] = []
         searcher = getattr(self.store, "search_video_transcripts", None)
         if callable(searcher):
             try:
                 hits = searcher(question, top_k=20)
             except Exception:  # noqa: BLE001 - video search must never break an answer
                 hits = []
-            for video_id in gate_semantic_suggestions(hits, exclude_ids=shown_ids):
-                video = self.video_store.videos.get(video_id)
-                if video is not None:
-                    suggestions.append(VideoMatch(video=video, score=1.0).to_dict())
+        sem: dict[str, float] = {}
+        for video_id, score in hits:
+            sem[video_id] = max(sem.get(video_id, 0.0), score)
+
+        def _rank(video) -> tuple[int, float]:
+            # An exact ASTM test-method match (cited D5321 ↔ the video's D5321 tag)
+            # outranks a broad family-tag match; ties break on transcript similarity.
+            specific = standards_overlap(
+                tuple(t for t in video.standards if t[:1].upper() == "D"), direct
+            )
+            return (1 if specific else 0, sem.get(video.video_id, 0.0))
+
+        eligible = [
+            v
+            for v in self.video_store.videos.values()
+            if v.standards and standards_overlap(v.standards, direct)
+        ]
+        eligible.sort(key=_rank, reverse=True)
+        # Show only the single best standard-matched video, and only if it's an exact
+        # designation match or genuinely on-topic (guards against family-tag noise).
+        videos: list[dict[str, object]] = []
+        if eligible:
+            best = eligible[0]
+            is_specific, sem_score = _rank(best)
+            if is_specific or sem_score >= 0.30:
+                videos = [VideoMatch(video=best, score=2.0).to_dict()]
+
+        shown_ids = {str(v["video_id"]) for v in videos}
+        suggestions: list[dict[str, object]] = []
+        for video_id in gate_semantic_suggestions(hits, exclude_ids=shown_ids):
+            video = self.video_store.videos.get(video_id)
+            if video is not None:
+                suggestions.append(VideoMatch(video=video, score=1.0).to_dict())
 
         if not videos and not suggestions:
             return response
