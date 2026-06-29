@@ -103,6 +103,7 @@ class Citation:
     section: str | None = None
     quote: str | None = None
     pdf_url: str | None = None
+    source_url: str | None = None
 
     @property
     def page_label(self) -> str:
@@ -127,4 +128,5 @@ class Citation:
             section=data.get("section"),
             quote=data.get("quote"),
             pdf_url=data.get("pdf_url"),
+            source_url=data.get("source_url"),
         )

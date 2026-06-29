@@ -1135,6 +1135,7 @@ def _citations_from_results(results: list[SearchResult] | tuple[SearchResult, ..
                 section=result.chunk.section,
                 quote=_evidence_sentence(result, max_chars=240),
                 pdf_url=_document_pdf_url(result.document),
+                source_url=_document_source_url(result.document),
             )
         )
     return citations
@@ -1245,6 +1246,24 @@ def _document_pdf_url(document: StandardDocument) -> str | None:
     if resolve_document_pdf_path(document) is None:
         return None
     return f"/documents/{quote(document.document_id, safe='')}/pdf"
+
+
+def _document_source_url(document: StandardDocument) -> str | None:
+    """External link a citation should point at instead of the inline PDF.
+
+    GRI standards link to the GSI member portal; ASTM standards link to the ASTM
+    Compass digital-document search for the base designation (e.g. ``D5721`` →
+    ``compass.astm.org/content-search/?content=D5721``). Anything else falls back
+    to the inline PDF (``source_url`` is None).
+    """
+    body = (document.issuing_body or "").upper()
+    if body == "GRI":
+        return "https://geosynthetic-institute.org/member.html"
+    if body == "ASTM":
+        match = re.match(r"(D\d+)", (document.standard_id or "").strip())
+        if match:
+            return f"https://compass.astm.org/content-search/?content={match.group(1)}"
+    return None
 
 
 def _chunk_section_type(result: SearchResult) -> str:

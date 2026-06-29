@@ -442,11 +442,13 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
                             {citation.title}
                           </>
                         );
-                        const pdfUrl = withAuthedFileUrl(citation.pdf_url);
+                        // GRI/ASTM citations link out (member portal / ASTM Compass);
+                        // everything else falls back to the inline authed PDF.
+                        const href = citation.source_url || withAuthedFileUrl(citation.pdf_url);
                         return (
                           <li key={citation.chunk_id}>
-                            {pdfUrl ? (
-                              <a className="doc-pdf-link" href={pdfUrl} target="_blank" rel="noopener noreferrer">
+                            {href ? (
+                              <a className="doc-pdf-link" href={href} target="_blank" rel="noopener noreferrer">
                                 {docLine}
                               </a>
                             ) : (
