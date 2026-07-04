@@ -5,7 +5,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import ChatSidebar from "./components/ChatSidebar";
-import LoginPanel from "./components/LoginPanel";
+import AuthExperience from "./components/AuthExperience";
 import {
   ApiError,
   assignConversationToProject,
@@ -21,7 +21,7 @@ import {
   sendChat,
   withAuthedFileUrl,
 } from "./api";
-import { clearSession, getUserEmail, loadAuthState, signOut } from "./auth";
+import { clearSession, getUserEmail, isAuthenticated, signOut } from "./auth";
 
 const PAREN_NOT_AFTER_LATEX_OPENER = "(?<!\\\\(?:left|bigl|Bigl|biggl|Biggl|mleft))";
 
@@ -76,7 +76,8 @@ function messagesFromConversation(record) {
 }
 
 function ChatApp() {
-  const [authState, setAuthState] = useState({ loading: true, authRequired: false, isLoggedIn: true });
+  const [loading, setLoading] = useState(true);
+  const [authed, setAuthed] = useState(isAuthenticated());
   const [conversations, setConversations] = useState([]);
   const [projects, setProjects] = useState([]);
   const [activeConversationId, setActiveConversationId] = useState(null);
@@ -89,36 +90,29 @@ function ChatApp() {
 
   const canSubmit = useMemo(() => question.trim().length > 0 && !isLoading, [question, isLoading]);
   const hasStarted = messages.length > 0;
-  const showAuthModal = authState.authRequired && !authState.isLoggedIn;
+  const showAuthModal = !authed;
 
   useEffect(() => {
     void bootstrap();
   }, []);
 
   async function bootstrap() {
+    if (!isAuthenticated()) {
+      setLoading(false);
+      return;
+    }
     try {
-      let state = await loadAuthState();
-      if (state.isLoggedIn) {
-        try {
-          await refreshSidebar();
-        } catch (refreshError) {
-          if (refreshError instanceof ApiError && refreshError.status === 401) {
-            clearSession();
-            state = { ...state, isLoggedIn: false };
-          } else {
-            throw refreshError;
-          }
-        }
+      await refreshSidebar();
+      setAuthed(true);
+    } catch (refreshError) {
+      if (refreshError instanceof ApiError && refreshError.status === 401) {
+        clearSession();
+        setAuthed(false);
+      } else {
+        setError(refreshError instanceof Error ? refreshError.message : "Failed to initialize app.");
       }
-      setAuthState({ loading: false, ...state });
-    } catch (bootstrapError) {
-      setAuthState({
-        loading: false,
-        authRequired: true,
-        isLoggedIn: false,
-        configured: false,
-      });
-      setError(bootstrapError instanceof Error ? bootstrapError.message : "Failed to initialize app.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -137,9 +131,13 @@ function ChatApp() {
   }
 
   async function handleSignedIn() {
-    const state = await loadAuthState();
-    setAuthState({ loading: false, ...state });
-    await refreshSidebar();
+    setError("");
+    setAuthed(true);
+    try {
+      await refreshSidebar();
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : "Failed to load your chats.");
+    }
   }
 
   function startNewChat() {
@@ -288,7 +286,7 @@ function ChatApp() {
     }
   }
 
-  if (authState.loading) {
+  if (loading) {
     return <div className="app-loading">Loading…</div>;
   }
 
@@ -324,8 +322,8 @@ function ChatApp() {
         onRenameProject={handleRenameProject}
         onDeleteProject={handleDeleteProject}
         onAssignToProject={handleAssignToProject}
-        userEmail={authState.configured ? getUserEmail() : ""}
-        canSignOut={Boolean(authState.configured)}
+        userEmail={authed ? getUserEmail() : ""}
+        canSignOut={authed}
         onSignOut={() => {
           signOut();
           window.location.reload();
@@ -369,7 +367,7 @@ function ChatApp() {
         )}
       </div>
 
-      {showAuthModal ? <LoginPanel onSignedIn={handleSignedIn} connectionError={error} /> : null}
+      {showAuthModal ? <AuthExperience onSignedIn={handleSignedIn} connectionError={error} /> : null}
     </div>
   );
 }

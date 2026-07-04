@@ -9,12 +9,26 @@ import {
 
 const TOKEN_KEY = "gsi_access_token";
 const ID_TOKEN_KEY = "gsi_id_token";
+const EMAIL_KEY = "gsi_user_email";
+const ACCOUNT_TYPE_KEY = "gsi_account_type";
 
 export function getAccessToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+export function isAuthenticated() {
+  return Boolean(getAccessToken());
+}
+
+export function getAccountType() {
+  return localStorage.getItem(ACCOUNT_TYPE_KEY) || "";
+}
+
 export function getUserEmail() {
+  // Membership sessions store the email directly; Cognito sessions carry it in
+  // the id token.
+  const stored = localStorage.getItem(EMAIL_KEY);
+  if (stored) return stored;
   const idToken = localStorage.getItem(ID_TOKEN_KEY);
   if (!idToken) return "";
   try {
@@ -24,6 +38,14 @@ export function getUserEmail() {
   } catch {
     return "";
   }
+}
+
+// Persist a membership (GSI-member / subscriber) session issued by the API.
+export function storeMembershipSession({ access_token, email, account_type }) {
+  localStorage.setItem(TOKEN_KEY, access_token);
+  if (email) localStorage.setItem(EMAIL_KEY, email);
+  if (account_type) localStorage.setItem(ACCOUNT_TYPE_KEY, account_type);
+  localStorage.removeItem(ID_TOKEN_KEY);
 }
 
 export function clearSession() {

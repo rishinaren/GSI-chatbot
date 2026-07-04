@@ -7,6 +7,12 @@ const PUBLIC_PATHS = new Set([
   "/auth/signup",
   "/auth/confirm",
   "/auth/resend-confirmation",
+  "/auth/membership/config",
+  "/auth/member/login",
+  "/auth/subscriber/login",
+  "/auth/subscriber/verify",
+  "/auth/subscriber/resend-code",
+  "/billing/subscribe",
   "/health",
 ]);
 
@@ -21,6 +27,8 @@ export class ApiError extends Error {
 export function clearStoredSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(ID_TOKEN_KEY);
+  localStorage.removeItem("gsi_user_email");
+  localStorage.removeItem("gsi_account_type");
 }
 
 function authHeaders(path) {
@@ -104,6 +112,47 @@ export function resendConfirmationCode(email) {
   return request("/auth/resend-confirmation", {
     method: "POST",
     body: JSON.stringify({ email }),
+  });
+}
+
+// ---- Membership + subscription auth ----
+
+export function getMembershipConfig() {
+  return request("/auth/membership/config");
+}
+
+export function memberLogin(email, password) {
+  return request("/auth/member/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function subscriberLogin(email, password) {
+  return request("/auth/subscriber/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function subscriberVerify(email, code) {
+  return request("/auth/subscriber/verify", {
+    method: "POST",
+    body: JSON.stringify({ email, code }),
+  });
+}
+
+export function subscriberResendCode(email) {
+  return request("/auth/subscriber/resend-code", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function subscribe({ email, password, name, payment }) {
+  return request("/billing/subscribe", {
+    method: "POST",
+    body: JSON.stringify({ email, password, name, payment }),
   });
 }
 

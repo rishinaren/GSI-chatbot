@@ -15,6 +15,7 @@ from standards_rag.auth import (
     confirm_sign_up,
     load_auth_config_from_env,
     login_with_password,
+    register_membership_validator,
     resend_confirmation_code,
     sign_up_with_password,
 )
@@ -24,6 +25,10 @@ from standards_rag.env_bootstrap import (
     default_standards_index_path,
     load_dotenv_files,
     sync_runtime_assets_from_s3,
+)
+from standards_rag.membership import (
+    MembershipError,
+    build_membership_service_from_env,
 )
 from standards_rag.openai_answer import (
     build_openai_answer_rewriter_from_env,
@@ -102,6 +107,23 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         logger.info("Loaded %d video transcripts", len(video_store))
 
     auth_config = load_auth_config_from_env()
+
+    # Membership layer (GSI-member + subscriber sign-in, subscription checkout).
+    # Its session tokens are accepted by the shared bearer-token auth below.
+    membership_service = build_membership_service_from_env()
+
+    def _membership_validator(token: str) -> AuthenticatedUser | None:
+        principal = membership_service.validate_token(token)
+        if principal is None:
+            return None
+        return AuthenticatedUser(
+            user_id=principal.user_id,
+            email=principal.email,
+            organization_id=principal.organization_id,
+        )
+
+    register_membership_validator(_membership_validator)
+
     conversation_store = build_conversation_store_from_env()
     engine = StandardsRagEngine(
         store,
@@ -145,11 +167,76 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             "openai_rewriter_flag": openai_rewriter_enabled(),
             "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY", "").strip()),
             "auth": auth_public_config(auth_config),
+            "membership": membership_service.public_config(),
         }
 
     @app.get("/auth/config")
     def auth_config_endpoint() -> dict[str, object]:
         return auth_public_config(auth_config)
+
+    @app.get("/auth/membership/config")
+    def membership_config_endpoint() -> dict[str, object]:
+        return membership_service.public_config()
+
+    @app.post("/auth/member/login")
+    def member_login(payload: dict[str, Any]) -> dict[str, object]:
+        """GSI members: validate against the member directory, no email code."""
+        email = str(payload.get("email", "")).strip()
+        password = str(payload.get("password", ""))
+        if not email or not password:
+            raise HTTPException(status_code=400, detail="email and password are required")
+        try:
+            return membership_service.member_login(email, password)
+        except MembershipError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/auth/subscriber/login")
+    def subscriber_login(payload: dict[str, Any]) -> dict[str, object]:
+        """Subscribers: verify password, then email a 2FA code (see /verify)."""
+        email = str(payload.get("email", "")).strip()
+        password = str(payload.get("password", ""))
+        if not email or not password:
+            raise HTTPException(status_code=400, detail="email and password are required")
+        try:
+            return membership_service.subscriber_login_start(email, password)
+        except MembershipError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/auth/subscriber/verify")
+    def subscriber_verify(payload: dict[str, Any]) -> dict[str, object]:
+        """Subscribers: exchange the emailed code for a session token."""
+        email = str(payload.get("email", "")).strip()
+        code = str(payload.get("code", "")).strip()
+        if not email or not code:
+            raise HTTPException(status_code=400, detail="email and code are required")
+        try:
+            return membership_service.subscriber_verify(email, code)
+        except MembershipError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/auth/subscriber/resend-code")
+    def subscriber_resend_code(payload: dict[str, Any]) -> dict[str, object]:
+        email = str(payload.get("email", "")).strip()
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        try:
+            return membership_service.subscriber_resend_code(email)
+        except MembershipError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/billing/subscribe")
+    def billing_subscribe(payload: dict[str, Any]) -> dict[str, object]:
+        """New subscribers: run the (placeholder) checkout, then email a code."""
+        email = str(payload.get("email", "")).strip()
+        password = str(payload.get("password", ""))
+        if not email or not password:
+            raise HTTPException(status_code=400, detail="email and password are required")
+        payment = payload.get("payment") if isinstance(payload.get("payment"), dict) else {}
+        name = str(payload.get("name", "")).strip() or None
+        try:
+            return membership_service.subscribe(email, password, payment or {}, name=name)
+        except MembershipError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     @app.post("/auth/login")
     def auth_login(payload: dict[str, Any]) -> dict[str, str]:

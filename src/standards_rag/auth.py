@@ -7,6 +7,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +36,18 @@ class AuthenticatedUser:
     user_id: str
     email: str | None = None
     organization_id: str | None = None
+
+
+# Optional membership-token validator, registered by the API at startup. It lets
+# ``authenticate_bearer_token`` accept GSI-member / subscriber session tokens
+# (issued by ``membership.MembershipService``) alongside Cognito tokens without
+# importing the membership module here (avoids an import cycle).
+_membership_validator: Callable[[str], AuthenticatedUser | None] | None = None
+
+
+def register_membership_validator(validator: Callable[[str], AuthenticatedUser | None] | None) -> None:
+    global _membership_validator
+    _membership_validator = validator
 
 
 def load_auth_config_from_env() -> AuthConfig:
@@ -127,6 +140,13 @@ def authenticate_bearer_token(
     scheme, _, token = authorization_header.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
         raise AuthError("Authorization header must use Bearer token.")
+
+    # Membership (GSI-member / subscriber) session tokens take priority so their
+    # per-user id is preserved even when Cognito is disabled.
+    if _membership_validator is not None:
+        membership_user = _membership_validator(token.strip())
+        if membership_user is not None:
+            return membership_user
 
     if not config.enabled:
         return AuthenticatedUser(user_id="local-dev-user", email="dev@local")
