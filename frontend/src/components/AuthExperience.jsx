@@ -212,7 +212,7 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
                 <span className="auth-option-eyebrow">Already a GSI member</span>
                 <span className="auth-option-title">Sign in with GSI credentials</span>
                 <span className="auth-option-desc">
-                  Your membership already includes the chatbot — no extra code needed.
+                  Your membership already includes access to the chatbot!
                 </span>
                 <span className="auth-option-cta">Continue →</span>
               </button>
