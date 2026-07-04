@@ -2,7 +2,6 @@ import unittest
 
 from standards_rag.membership import (
     EmailCodeService,
-    InMemorySubscriberStore,
     LoggingEmailCodeSender,
     MembershipError,
     MembershipService,
@@ -14,10 +13,38 @@ from standards_rag.membership import (
 )
 
 
+class FakeSubscriberAuth:
+    """Stands in for Cognito in tests: an in-memory account book."""
+
+    def __init__(self) -> None:
+        self.accounts: dict[str, str] = {"subscriber@gsi.org": "subscriber1234"}
+        self.confirmed: set[str] = {"subscriber@gsi.org"}
+
+    def verify_password(self, email: str, password: str) -> None:
+        email = email.lower()
+        if self.accounts.get(email) != password:
+            raise MembershipError("That email or password is incorrect.", status_code=401)
+        if email not in self.confirmed:
+            raise MembershipError("Confirm your email first.", status_code=400)
+
+    def sign_up(self, email: str, password: str) -> dict:
+        email = email.lower()
+        if email in self.accounts:
+            raise MembershipError("An account with this email already exists.", status_code=409)
+        self.accounts[email] = password
+        return {"user_confirmed": False, "destination": email}
+
+    def confirm(self, email: str, code: str) -> None:
+        self.confirmed.add(email.lower())
+
+    def resend_signup_code(self, email: str) -> dict:
+        return {"destination": email}
+
+
 def _build_service(demo_mode: bool = True) -> MembershipService:
     return MembershipService(
         member_directory=PlaceholderMemberDirectory.with_demo_seed(),
-        subscriber_store=InMemorySubscriberStore.with_demo_seed(),
+        subscriber_auth=FakeSubscriberAuth(),
         code_service=EmailCodeService(LoggingEmailCodeSender()),
         token_service=MembershipTokenService("test-secret"),
         billing=PlaceholderBillingProvider(),
@@ -69,6 +96,7 @@ class SubscriberFlowTests(unittest.TestCase):
         self.assertEqual(result["account_type"], "subscriber")
         principal = service.validate_token(result["access_token"])
         self.assertEqual(principal.account_type, "subscriber")
+        self.assertEqual(principal.user_id, "subscriber:subscriber@gsi.org")
 
     def test_wrong_password_rejected(self) -> None:
         service = _build_service()
@@ -88,14 +116,17 @@ class SubscriberFlowTests(unittest.TestCase):
 
 
 class SubscribeCheckoutTests(unittest.TestCase):
-    def test_subscribe_creates_account_and_starts_trial(self) -> None:
+    def test_subscribe_registers_cognito_user_and_needs_confirm(self) -> None:
         service = _build_service()
-        challenge = service.subscribe("new@user.com", "password123", {"card": "4242"})
-        self.assertEqual(challenge["challenge"], "email_code")
-        self.assertEqual(challenge["subscription"]["status"], "trialing")
-        # A new subscriber can verify with the emailed code and get a token.
-        result = service.subscriber_verify("new@user.com", challenge["demo_code"])
-        self.assertEqual(result["account_type"], "subscriber")
+        result = service.subscribe("new@user.com", "password123", {"card": "4242"})
+        self.assertEqual(result["subscription"]["status"], "trialing")
+        self.assertFalse(result["signup"]["user_confirmed"])
+        self.assertNotIn("access_token", result)  # must confirm email first
+        # Confirming the emailed signup code starts the session.
+        confirmed = service.subscriber_confirm_signup("new@user.com", "123456")
+        self.assertEqual(confirmed["account_type"], "subscriber")
+        principal = service.validate_token(confirmed["access_token"])
+        self.assertEqual(principal.account_type, "subscriber")
 
     def test_duplicate_email_rejected(self) -> None:
         service = _build_service()

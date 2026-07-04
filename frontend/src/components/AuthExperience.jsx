@@ -3,8 +3,10 @@ import {
   getMembershipConfig,
   memberLogin,
   subscribe as apiSubscribe,
+  subscriberConfirm,
   subscriberLogin,
   subscriberResendCode,
+  subscriberResendSignupCode,
   subscriberVerify,
 } from "../api";
 import { storeMembershipSession } from "../auth";
@@ -77,8 +79,8 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
   const [card, setCard] = useState({ number: "", expiry: "", cvc: "", zip: "" });
   const [code, setCode] = useState("");
 
-  const [challenge, setChallenge] = useState(null); // { email, destination, demo_code }
-  const [codeReturnStep, setCodeReturnStep] = useState("subscriber");
+  const [challenge, setChallenge] = useState(null); // login code: { email, destination, demo_code }
+  const [signupPending, setSignupPending] = useState(null); // signup confirm: { email, destination }
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -127,7 +129,6 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
     try {
       const result = await subscriberLogin(email.trim(), password);
       setChallenge(result);
-      setCodeReturnStep("subscriber");
       setCode("");
       goto("code");
     } catch (err) {
@@ -148,10 +149,13 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
         name: name.trim() || null,
         payment: { ...card },
       });
-      setChallenge(result);
-      setCodeReturnStep("subscribe");
+      if (result.access_token) {
+        finishSignIn(result); // account already confirmed
+        return;
+      }
+      setSignupPending(result.signup || { email: email.trim() });
       setCode("");
-      goto("code");
+      goto("signup-confirm");
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -159,6 +163,7 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
     }
   }
 
+  // Subscriber login: verify the per-login email code.
   async function handleVerify(event) {
     event.preventDefault();
     setError("");
@@ -181,6 +186,35 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
       const result = await subscriberResendCode(challenge?.email || email.trim());
       setChallenge((current) => ({ ...current, ...result }));
       setNotice("A new code is on its way.");
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // New subscriber: confirm the Cognito signup email code.
+  async function handleConfirmSignup(event) {
+    event.preventDefault();
+    setError("");
+    setSubmitting(true);
+    try {
+      const result = await subscriberConfirm(signupPending?.email || email.trim(), code.trim());
+      finishSignIn(result);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleResendSignup() {
+    setError("");
+    setNotice("");
+    setSubmitting(true);
+    try {
+      await subscriberResendSignupCode(signupPending?.email || email.trim());
+      setNotice("A new verification code is on its way.");
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -310,7 +344,7 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
 
         {step === "code" ? (
           <div className="auth-form-wrap">
-            <BackButton onClick={() => goto(codeReturnStep)} />
+            <BackButton onClick={() => goto("subscriber")} />
             <h1>Enter your login code</h1>
             <p className="auth-subtitle">
               We sent a 6-digit code to <strong>{challenge?.destination || "your email"}</strong>.
@@ -336,6 +370,41 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
                 {submitting ? "Verifying…" : "Verify & sign in"}
               </button>
               <button type="button" className="auth-link centered" onClick={handleResend} disabled={submitting}>
+                Resend code
+              </button>
+            </form>
+          </div>
+        ) : null}
+
+        {step === "signup-confirm" ? (
+          <div className="auth-form-wrap">
+            <BackButton onClick={() => goto("subscribe")} />
+            <h1>Verify your email</h1>
+            <p className="auth-subtitle">
+              Your trial is set up. Enter the verification code we emailed to{" "}
+              <strong>{signupPending?.destination || "your email"}</strong> to finish.
+            </p>
+            {notice ? <div className="auth-notice">{notice}</div> : null}
+            <form className="auth-form" onSubmit={handleConfirmSignup}>
+              <Field
+                id="signup-code"
+                label="Verification code"
+                value={code}
+                onChange={setCode}
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                placeholder="123456"
+              />
+              {error ? <div className="auth-error">{error}</div> : null}
+              <button type="submit" className="auth-submit" disabled={submitting}>
+                {submitting ? "Verifying…" : "Verify & continue"}
+              </button>
+              <button
+                type="button"
+                className="auth-link centered"
+                onClick={handleResendSignup}
+                disabled={submitting}
+              >
                 Resend code
               </button>
             </form>
@@ -386,7 +455,7 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
                     value={password}
                     onChange={setPassword}
                     autoComplete="new-password"
-                    placeholder="At least 8 characters"
+                    placeholder="8+ chars: upper & lower case, number, symbol"
                   />
                   <Field
                     id="checkout-card"

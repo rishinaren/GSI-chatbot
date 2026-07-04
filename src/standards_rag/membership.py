@@ -10,16 +10,19 @@ Two audiences share the chatbot, with deliberately different login flows:
   seam — swap in the real GSI backend later without touching the routes/UI.
 
 * **Subscribers** — people paying for the chatbot on its own ($1,200/yr, 1-month
-  free trial). They are *not* vetted through GSI, so every login requires an
-  **email one-time code (2FA)**. Accounts + billing live behind the
-  ``SubscriberStore`` / ``BillingProvider`` seams (in-memory placeholders here;
-  swap for DynamoDB/Cognito + Stripe later).
+  free trial). They are *not* vetted through GSI, so their sign-in requires an
+  **email one-time code (2FA)**. Their accounts are **real Cognito users**
+  (``CognitoSubscriberAuth`` behind the ``SubscriberAuthProvider`` seam), so an
+  existing Cognito login keeps working and new signups verify their email
+  through Cognito. The per-login code is layered on via ``EmailCodeService``
+  (shown on-screen in demo mode); once SES is out of sandbox it can move to
+  native Cognito email MFA. Billing is a ``BillingProvider`` placeholder (swap
+  for Stripe).
 
-Everything below is intentionally self-contained so the whole flow is
-demo-functional today, with obvious ``build_*_from_env`` seams for the real
+Everything is demo-functional today, with obvious seams for the real
 integrations. Session tokens are stdlib-signed HS256 JWTs (no external dep) so
 the same ``Authorization: Bearer`` plumbing the rest of the API already uses
-keeps working.
+keeps working — ``authenticate_bearer_token`` validates them alongside Cognito.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ import logging
 import os
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -205,56 +208,74 @@ class PlaceholderMemberDirectory:
 
 
 # ---------------------------------------------------------------------------
-# Subscriber store (self-serve paying customers; email 2FA). Swap seam.
+# Subscriber accounts (self-serve paying customers) — backed by real Cognito.
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class SubscriberRecord:
-    email: str
-    password_hash: str
-    status: str = "trialing"  # trialing | active | canceled
-    email_verified: bool = False
-    name: str | None = None
-    subscription_id: str | None = None
-    trial_ends_at: int | None = None
-    created_at: int = field(default_factory=lambda: int(time.time()))
+class SubscriberAuthProvider(Protocol):
+    """Identity backing for subscribers. The default implementation is the real
+    Cognito user pool; tests inject a fake. All methods raise ``MembershipError``
+    on failure (mapped to a user-facing message + HTTP status)."""
 
-
-class SubscriberStore(Protocol):
-    def get(self, email: str) -> SubscriberRecord | None:  # pragma: no cover - protocol
+    def verify_password(self, email: str, password: str) -> None:  # pragma: no cover - protocol
         ...
 
-    def upsert(self, record: SubscriberRecord) -> None:  # pragma: no cover - protocol
+    def sign_up(self, email: str, password: str) -> dict[str, Any]:  # pragma: no cover - protocol
+        ...
+
+    def confirm(self, email: str, code: str) -> None:  # pragma: no cover - protocol
+        ...
+
+    def resend_signup_code(self, email: str) -> dict[str, Any]:  # pragma: no cover - protocol
         ...
 
 
-class InMemorySubscriberStore:
-    """Placeholder subscriber store. Swap for DynamoDB/Cognito later."""
+class CognitoSubscriberAuth:
+    """Backs subscribers with the real Cognito user pool.
 
-    def __init__(self) -> None:
-        self._by_email: dict[str, SubscriberRecord] = {}
+    Subscribers sign in with their actual Cognito credentials (so an existing
+    account keeps working), and new subscribers are registered + email-verified
+    through Cognito. A per-login one-time code is layered on top (see
+    ``EmailCodeService``); once SES is out of sandbox this can move to native
+    Cognito email MFA. Cognito's own tokens are only used here to *validate* the
+    password — the session itself is a membership token minted after the code.
+    """
 
-    @classmethod
-    def with_demo_seed(cls) -> InMemorySubscriberStore:
-        store = cls()
-        store.upsert(
-            SubscriberRecord(
-                email="subscriber@gsi.org",
-                password_hash=_hash_password("subscriber1234"),
-                status="active",
-                email_verified=True,
-                name="Demo Subscriber",
-                subscription_id="sub_demo_seed",
-            )
-        )
-        return store
+    def _err(self, exc: Exception, default_status: int) -> MembershipError:
+        status = getattr(exc, "status_code", default_status)
+        return MembershipError(str(exc) or "Authentication failed.", status_code=status)
 
-    def get(self, email: str) -> SubscriberRecord | None:
-        return self._by_email.get(email.strip().lower())
+    def verify_password(self, email: str, password: str) -> None:
+        from standards_rag.auth import AuthError, login_with_password
 
-    def upsert(self, record: SubscriberRecord) -> None:
-        self._by_email[record.email.strip().lower()] = record
+        try:
+            login_with_password(email, password)  # tokens discarded; validity is all we need
+        except AuthError as exc:
+            raise self._err(exc, 401) from exc
+
+    def sign_up(self, email: str, password: str) -> dict[str, Any]:
+        from standards_rag.auth import AuthError, sign_up_with_password
+
+        try:
+            return sign_up_with_password(email, password)
+        except AuthError as exc:
+            raise self._err(exc, 400) from exc
+
+    def confirm(self, email: str, code: str) -> None:
+        from standards_rag.auth import AuthError, confirm_sign_up
+
+        try:
+            confirm_sign_up(email, code)
+        except AuthError as exc:
+            raise self._err(exc, 400) from exc
+
+    def resend_signup_code(self, email: str) -> dict[str, Any]:
+        from standards_rag.auth import AuthError, resend_confirmation_code
+
+        try:
+            return resend_confirmation_code(email)
+        except AuthError as exc:
+            raise self._err(exc, 400) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -417,14 +438,14 @@ class MembershipService:
         self,
         *,
         member_directory: MemberDirectory,
-        subscriber_store: SubscriberStore,
+        subscriber_auth: SubscriberAuthProvider,
         code_service: EmailCodeService,
         token_service: MembershipTokenService,
         billing: BillingProvider,
         demo_mode: bool = True,
     ) -> None:
         self.member_directory = member_directory
-        self.subscriber_store = subscriber_store
+        self.subscriber_auth = subscriber_auth
         self.code_service = code_service
         self.token_service = token_service
         self.billing = billing
@@ -475,75 +496,66 @@ class MembershipService:
             response["demo_code"] = code
         return response
 
-    def subscriber_login_start(self, email: str, password: str) -> dict[str, Any]:
-        record = self.subscriber_store.get(email)
-        if record is None or not _verify_password(password, record.password_hash):
-            raise MembershipError("That email or password is incorrect. Please try again.", status_code=401)
-        if record.status == "canceled":
-            raise MembershipError(
-                "This subscription has been canceled. Renew to keep access.", status_code=403
-            )
-        return self._challenge_response(record.email)
-
-    def subscriber_resend_code(self, email: str) -> dict[str, Any]:
-        record = self.subscriber_store.get(email)
-        if record is None:
-            raise MembershipError("No subscription found for that email.", status_code=404)
-        return self._challenge_response(record.email)
-
-    def subscriber_verify(self, email: str, code: str) -> dict[str, Any]:
-        record = self.subscriber_store.get(email)
-        if record is None:
-            raise MembershipError("No subscription found for that email.", status_code=404)
-        if not self.code_service.verify(email, code):
-            raise MembershipError("That code is incorrect or has expired. Request a new one.", status_code=401)
-        # First successful code both verifies the email and activates the login.
-        if not record.email_verified:
-            record.email_verified = True
-            self.subscriber_store.upsert(record)
+    def _subscriber_session(self, email: str) -> dict[str, Any]:
         principal = MembershipPrincipal(
-            user_id=_user_id_for("subscriber", record.email),
-            email=record.email,
+            user_id=_user_id_for("subscriber", email),
+            email=email.strip().lower(),
             account_type="subscriber",
-            name=record.name,
         )
         return {
             "access_token": self.token_service.mint(principal),
             "account_type": "subscriber",
             "email": principal.email,
-            "name": record.name,
         }
 
-    # -- Subscription checkout (creates a subscriber, starts a trial) -----
+    def subscriber_login_start(self, email: str, password: str) -> dict[str, Any]:
+        # Validate the password against real Cognito, then require a login code.
+        self.subscriber_auth.verify_password(email, password)
+        return self._challenge_response(email)
+
+    def subscriber_resend_code(self, email: str) -> dict[str, Any]:
+        # Re-issue the per-login code (the password was already validated).
+        return self._challenge_response(email)
+
+    def subscriber_verify(self, email: str, code: str) -> dict[str, Any]:
+        if not self.code_service.verify(email, code):
+            raise MembershipError("That code is incorrect or has expired. Request a new one.", status_code=401)
+        return self._subscriber_session(email)
+
+    # -- Subscription checkout (placeholder billing + real Cognito signup) -
     def subscribe(self, email: str, password: str, payment: dict[str, Any], *, name: str | None = None) -> dict[str, Any]:
         email = email.strip().lower()
         if not email or "@" not in email:
             raise MembershipError("Enter a valid email address.")
         if len(password) < 8:
             raise MembershipError("Choose a password with at least 8 characters.")
-        existing = self.subscriber_store.get(email)
-        if existing is not None and existing.status != "canceled":
-            raise MembershipError(
-                "An account with this email already exists. Sign in instead.", status_code=409
-            )
+        # Placeholder checkout (no card charged), then register the Cognito user.
         billing = self.billing.create_subscription(email, payment)
-        record = SubscriberRecord(
-            email=email,
-            password_hash=_hash_password(password),
-            status=str(billing.get("status") or "trialing"),
-            email_verified=False,
-            name=name,
-            subscription_id=str(billing.get("subscription_id") or ""),
-            trial_ends_at=billing.get("trial_ends_at"),
-        )
-        self.subscriber_store.upsert(record)
-        challenge = self._challenge_response(email)
-        challenge["subscription"] = {
-            "status": record.status,
-            "trial_ends_at": record.trial_ends_at,
-            "plan": PLAN,
+        signup = self.subscriber_auth.sign_up(email, password)
+        result: dict[str, Any] = {
+            "subscription": {
+                "status": str(billing.get("status") or "trialing"),
+                "trial_ends_at": billing.get("trial_ends_at"),
+                "plan": PLAN,
+            },
+            "signup": {
+                "user_confirmed": bool(signup.get("user_confirmed")),
+                "destination": str(signup.get("destination") or _mask_email(email)),
+                "email": email,
+            },
         }
-        return challenge
+        # Cognito normally requires an email confirmation code before first login.
+        if signup.get("user_confirmed"):
+            result.update(self._subscriber_session(email))
+        return result
+
+    def subscriber_confirm_signup(self, email: str, code: str) -> dict[str, Any]:
+        # Confirm the Cognito email code from signup, then start the session.
+        self.subscriber_auth.confirm(email, code)
+        return self._subscriber_session(email)
+
+    def subscriber_resend_signup_code(self, email: str) -> dict[str, Any]:
+        return self.subscriber_auth.resend_signup_code(email)
 
 
 def _mask_email(email: str) -> str:
@@ -599,7 +611,7 @@ def build_membership_service_from_env() -> MembershipService:
     demo_mode = _bool_env("MEMBERSHIP_DEMO_MODE", True)
     return MembershipService(
         member_directory=_build_member_directory_from_env(),
-        subscriber_store=InMemorySubscriberStore.with_demo_seed(),
+        subscriber_auth=CognitoSubscriberAuth(),
         code_service=EmailCodeService(LoggingEmailCodeSender()),
         token_service=MembershipTokenService(_membership_secret()),
         billing=PlaceholderBillingProvider(),

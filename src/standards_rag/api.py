@@ -224,6 +224,28 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         except MembershipError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
+    @app.post("/auth/subscriber/confirm")
+    def subscriber_confirm(payload: dict[str, Any]) -> dict[str, object]:
+        """New subscribers: confirm the Cognito signup email code → session token."""
+        email = str(payload.get("email", "")).strip()
+        code = str(payload.get("code", "")).strip()
+        if not email or not code:
+            raise HTTPException(status_code=400, detail="email and code are required")
+        try:
+            return membership_service.subscriber_confirm_signup(email, code)
+        except MembershipError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/auth/subscriber/resend-signup-code")
+    def subscriber_resend_signup_code(payload: dict[str, Any]) -> dict[str, object]:
+        email = str(payload.get("email", "")).strip()
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        try:
+            return membership_service.subscriber_resend_signup_code(email)
+        except MembershipError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
     @app.post("/billing/subscribe")
     def billing_subscribe(payload: dict[str, Any]) -> dict[str, object]:
         """New subscribers: run the (placeholder) checkout, then email a code."""

@@ -12,6 +12,8 @@ const PUBLIC_PATHS = new Set([
   "/auth/subscriber/login",
   "/auth/subscriber/verify",
   "/auth/subscriber/resend-code",
+  "/auth/subscriber/confirm",
+  "/auth/subscriber/resend-signup-code",
   "/billing/subscribe",
   "/health",
 ]);
@@ -144,6 +146,20 @@ export function subscriberVerify(email, code) {
 
 export function subscriberResendCode(email) {
   return request("/auth/subscriber/resend-code", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function subscriberConfirm(email, code) {
+  return request("/auth/subscriber/confirm", {
+    method: "POST",
+    body: JSON.stringify({ email, code }),
+  });
+}
+
+export function subscriberResendSignupCode(email) {
+  return request("/auth/subscriber/resend-signup-code", {
     method: "POST",
     body: JSON.stringify({ email }),
   });
