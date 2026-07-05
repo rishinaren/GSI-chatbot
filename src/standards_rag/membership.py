@@ -289,14 +289,55 @@ class EmailCodeSender(Protocol):
 
 
 class LoggingEmailCodeSender:
-    """Placeholder sender: logs the code instead of emailing it.
+    """Fallback sender: logs the code instead of emailing it.
 
-    Replace with an SES/SMTP-backed sender. When ``demo_mode`` is on the code is
-    also returned in API responses so the flow can be demoed without a mailbox.
+    Used when no real email transport is configured. When ``demo_mode`` is on the
+    code is also returned in API responses so the flow can be demoed without a
+    mailbox.
     """
 
     def send(self, email: str, code: str) -> None:
         logger.info("[membership] email code for %s: %s", email, code)
+
+
+class SesEmailCodeSender:
+    """Emails the login code via Amazon SES (real per-login 2FA delivery).
+
+    Enabled by setting ``MEMBERSHIP_CODE_EMAIL_FROM`` to a verified SES sender.
+    Note: while SES is in sandbox it only delivers to verified recipients — see
+    HANDOFF §6.8 for the production-access path.
+    """
+
+    def __init__(self, from_address: str, *, region: str | None = None) -> None:
+        self._from = from_address
+        self._region = region or os.getenv("AWS_REGION") or "us-east-1"
+
+    def send(self, email: str, code: str) -> None:
+        import boto3  # lazy: only needed when SES delivery is configured
+
+        client = boto3.client("ses", region_name=self._region)
+        client.send_email(
+            Source=self._from,
+            Destination={"ToAddresses": [email]},
+            Message={
+                "Subject": {"Data": "Your GSI Chatbot login code"},
+                "Body": {
+                    "Text": {
+                        "Data": (
+                            f"Your GSI Chatbot login code is {code}.\n\n"
+                            "It expires in 10 minutes. If you didn't try to sign in, ignore this email."
+                        )
+                    },
+                    "Html": {
+                        "Data": (
+                            f"<p>Your GSI Chatbot login code is <strong style=\"font-size:1.3em;"
+                            f"letter-spacing:2px\">{code}</strong>.</p>"
+                            "<p>It expires in 10 minutes. If you didn't try to sign in, ignore this email.</p>"
+                        )
+                    },
+                },
+            },
+        )
 
 
 @dataclass
@@ -309,16 +350,35 @@ class _PendingCode:
 class EmailCodeService:
     """Generates, stores, and verifies short-lived 6-digit login codes."""
 
-    def __init__(self, sender: EmailCodeSender, *, ttl_seconds: int = 600, max_attempts: int = 5) -> None:
+    def __init__(
+        self,
+        sender: EmailCodeSender,
+        *,
+        ttl_seconds: int = 600,
+        max_attempts: int = 5,
+        strict_delivery: bool = False,
+    ) -> None:
         self._sender = sender
         self._ttl = ttl_seconds
         self._max_attempts = max_attempts
+        # When strict (i.e. not demo mode), a send failure surfaces as an error so
+        # the user isn't silently stranded with no code. In demo mode the code is
+        # also returned on-screen, so a failed send is best-effort.
+        self._strict = strict_delivery
         self._pending: dict[str, _PendingCode] = {}
 
     def issue(self, email: str) -> str:
         code = f"{secrets.randbelow(1_000_000):06d}"
         self._pending[email.strip().lower()] = _PendingCode(code=code, expires_at=time.time() + self._ttl)
-        self._sender.send(email, code)
+        try:
+            self._sender.send(email, code)
+        except Exception as exc:  # noqa: BLE001 - transport errors are surfaced/logged
+            logger.warning("Failed to send login code to %s: %s", email, exc)
+            if self._strict:
+                raise MembershipError(
+                    "We couldn't send your login code right now. Please try again in a moment.",
+                    status_code=502,
+                ) from exc
         return code
 
     def verify(self, email: str, code: str) -> bool:
@@ -607,12 +667,23 @@ def _membership_secret() -> str:
     return "gsi-membership-dev-secret-change-me"
 
 
+def _build_code_service_from_env(demo_mode: bool) -> EmailCodeService:
+    from_address = os.getenv("MEMBERSHIP_CODE_EMAIL_FROM", "").strip()
+    if from_address:
+        sender: EmailCodeSender = SesEmailCodeSender(from_address)
+        logger.info("Membership login codes will be emailed via SES from %s", from_address)
+    else:
+        sender = LoggingEmailCodeSender()
+    # Out of demo mode the on-screen code is hidden, so delivery must be reliable.
+    return EmailCodeService(sender, strict_delivery=not demo_mode)
+
+
 def build_membership_service_from_env() -> MembershipService:
     demo_mode = _bool_env("MEMBERSHIP_DEMO_MODE", True)
     return MembershipService(
         member_directory=_build_member_directory_from_env(),
         subscriber_auth=CognitoSubscriberAuth(),
-        code_service=EmailCodeService(LoggingEmailCodeSender()),
+        code_service=_build_code_service_from_env(demo_mode),
         token_service=MembershipTokenService(_membership_secret()),
         billing=PlaceholderBillingProvider(),
         demo_mode=demo_mode,
