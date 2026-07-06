@@ -1027,6 +1027,7 @@ class StandardsRagEngine:
             gate_semantic_suggestions,
             parse_standard_ids_from_title,
             standards_overlap,
+            video_suggestion_reason,
         )
 
         # "Direct" standards: cited in the answer or named in the question text.
@@ -1073,7 +1074,10 @@ class StandardsRagEngine:
         for video_id in gate_semantic_suggestions(hits, exclude_ids=shown_ids):
             video = self.video_store.videos.get(video_id)
             if video is not None:
-                suggestions.append(VideoMatch(video=video, score=1.0).to_dict())
+                suggestion = VideoMatch(video=video, score=1.0).to_dict()
+                # Explain *why* we're offering a video the answer didn't directly cite.
+                suggestion["reason"] = video_suggestion_reason(video)
+                suggestions.append(suggestion)
 
         if not videos and not suggestions:
             return response

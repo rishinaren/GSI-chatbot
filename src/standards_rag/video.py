@@ -77,6 +77,48 @@ def parse_standard_ids_from_title(title: str) -> tuple[str, ...]:
     return tuple(found)
 
 
+# Strip a leading run of issuing-body words / bare designations / separators from a
+# video title so we're left with its plain-language topic ("Transmissivity of
+# Geosynthetics"). Applied repeatedly, one leading token at a time.
+_LEAD_TOKEN_RE = re.compile(
+    r"^\s*(?:(?:GRI|ASTM|ISO|AASHTO)\b|[A-Za-z]{1,4}\s?-?\s?\d{2,5}[A-Za-z]?|[,&]|and\b)\s*",
+    re.IGNORECASE,
+)
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def video_topic_phrase(title: str) -> str:
+    """The plain-language subject of a video title, with body/designation prefixes and
+    any trailing parenthetical stripped (e.g. -> "Transmissivity of Geosynthetics")."""
+    text = (title or "").strip()
+    prev = None
+    while text and text != prev:
+        prev = text
+        text = _LEAD_TOKEN_RE.sub("", text, count=1)
+    text = _TRAILING_PAREN_RE.sub("", text).strip()
+    return text or (title or "").strip()
+
+
+def _humanize_topic(phrase: str) -> str:
+    """Lowercase a topic phrase for mid-sentence use, preserving acronyms (HDPE, CBR,
+    GCCM) and any token carrying a designation number."""
+    words = []
+    for word in phrase.split():
+        if (len(word) >= 2 and word.isupper()) or any(ch.isdigit() for ch in word):
+            words.append(word)
+        else:
+            words.append(word.lower())
+    return " ".join(words)
+
+
+def video_suggestion_reason(video: "VideoTranscript") -> str:
+    """One sentence explaining why a partially-related video is being offered."""
+    topic = _humanize_topic(video_topic_phrase(video.title))
+    if not topic:
+        return "We may have a related video that partially covers this topic."
+    return f"We may have a related video that partially covers {topic}."
+
+
 def _designation_key(value: str) -> str:
     """Comparable core of a designation: lowercased alnum with the issuing body stripped."""
     compact = re.sub(r"[^a-z0-9]", "", (value or "").lower())
@@ -96,12 +138,15 @@ def standards_overlap(video_standards: tuple[str, ...], cited: set[str]) -> bool
     return False
 
 
-# Precision-first gate for the *semantic* (transcript) video signal. A suggestion
-# fires only on a strongly sustained match, so a passing topical mention never
-# surfaces. Tuned on the 24-video set (see scripts/ingest_video_transcripts.py).
-_SEM_BEST_FLOOR = 0.50      # one chunk this strong is enough
+# Precision-first gate for the *semantic* (transcript) video signal. This is the
+# "partially related" tier: the answer stands on its own, and we offer a video that
+# only partly covers the topic. It fires on a strong single chunk OR a *sustained
+# partial* match (a couple of moderately-on-topic segments), so a lone passing
+# mention still never surfaces. Tuned on the 24-video set (see
+# scripts/ingest_video_transcripts.py).
+_SEM_BEST_FLOOR = 0.50      # one chunk this strong is enough on its own
 _SEM_STRONG_SCORE = 0.42    # "strong chunk" cutoff for the density signal
-_SEM_STRONG_COUNT = 3       # this many strong chunks = sustained relevance
+_SEM_STRONG_COUNT = 2       # this many strong chunks = sustained partial relevance
 
 
 def gate_semantic_suggestions(

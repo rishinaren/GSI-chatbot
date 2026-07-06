@@ -541,7 +541,11 @@ function VideoSuggestion({ video }) {
   return (
     <div className="video-suggestion">
       <span className="video-suggestion-text">
-        A related video may help: <strong>{video.title}</strong>
+        {video.reason ? (
+          video.reason
+        ) : (
+          <>A related video may help: <strong>{video.title}</strong></>
+        )}
       </span>
       <button type="button" className="video-suggestion-btn" onClick={() => setShown(true)}>
         Show video
