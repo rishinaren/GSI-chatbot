@@ -475,16 +475,6 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
           )}
         </div>
 
-        {followUpSuggestions.length > 0 && (
-          <div className="follow-up-row">
-            {followUpSuggestions.map((suggestion) => (
-              <button key={suggestion} type="button" className="follow-up-chip" onClick={() => sendQuestion(suggestion)}>
-                {suggestion}
-              </button>
-            ))}
-          </div>
-        )}
-
         <div className="composer-wrap">
           {error ? <div className="composer-error">{error}</div> : null}
           <Composer {...composerProps} variant="docked" />
