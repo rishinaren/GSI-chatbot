@@ -291,22 +291,9 @@ function ChatApp() {
   }
 
   const composerProps = { question, setQuestion, canSubmit, onSubmit, onKeyDown };
-  const unitControl = (
-    <div className="unit-control">
-      <label htmlFor="units">Units</label>
-      <div className="select-wrap">
-        <select
-          id="units"
-          value={unitPreference}
-          onChange={(event) => setUnitPreference(event.target.value)}
-        >
-          <option value="">As in standard</option>
-          <option value="si">SI / metric</option>
-          <option value="imperial">US / imperial</option>
-        </select>
-      </div>
-    </div>
-  );
+  // Units selector hidden: in prod the OpenAI rewriter strips the appended unit-conversion
+  // note (it forbids numbers not in the source), so the control had no visible effect.
+  // unitPreference is retained (sent as-is) so a real unit feature can be re-added later.
 
   return (
     <div className="app-shell">
@@ -339,7 +326,6 @@ function ChatApp() {
             </div>
           </div>
           <div className="header-right">
-            {unitControl}
             <a
               className="header-logo-link"
               href="https://geosynthetic-institute.org/"

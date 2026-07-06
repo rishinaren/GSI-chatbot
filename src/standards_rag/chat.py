@@ -935,6 +935,18 @@ class StandardsRagEngine:
         previous = history[-1]
         previous_document_ids = {citation.document_id for citation in previous.citations}
         previous_standards = " ".join(citation.standard_id for citation in previous.citations)
+
+        # A *broadening* follow-up ("compare that to the ASTM approach", "what do other
+        # standards say?") wants to pull in a DIFFERENT body than the prior answer.
+        # Anchor retrieval on the prior *topic* (the previous question) so we stay on
+        # subject while widening across bodies, and do NOT scope to the previous answer's
+        # documents — otherwise we can only ever cite those same docs. The routing still
+        # sees the literal "compare…" question, so the comparison template kicks in.
+        if _is_broadening_follow_up(question):
+            return previous.question, None
+
+        # Default (narrowing) follow-up ("tell me more about that"): stay within the
+        # prior answer's documents.
         return f"{previous.question}\nFollow-up: {question}\nPrior standards: {previous_standards}", (
             previous_document_ids or None
         )
@@ -1857,8 +1869,40 @@ def _looks_like_follow_up(question: str) -> bool:
     if any(marker in lowered for marker in phrase_markers):
         return True
 
-    word_markers = ("that", "those", "them", "it", "same", "their", "there")
+    word_markers = ("that", "this", "these", "those", "them", "it", "same", "their", "there")
     return any(re.search(rf"\b{re.escape(marker)}\b", lowered) for marker in word_markers)
+
+
+# Cues that a follow-up wants to widen scope to a different standards body / the broader
+# literature, rather than dig deeper into the prior answer's own documents.
+_BROADENING_CUES = (
+    "compare",
+    "comparison",
+    "contrast",
+    "versus",
+    "vs.",
+    "vs ",
+    "other standard",
+    "other standards",
+    "other literature",
+    "literature",
+    "difference",
+    "differ",
+    "elsewhere",
+    "alternativ",
+    "instead",
+    "besides",
+)
+_STANDARD_BODIES = ("astm", "iso", "gri", "aashto", "en ")
+
+
+def _is_broadening_follow_up(question: str) -> bool:
+    """True when a follow-up asks to bring in another body/topic (so retrieval must
+    NOT be locked to the previous answer's documents)."""
+    lowered = question.lower()
+    if any(cue in lowered for cue in _BROADENING_CUES):
+        return True
+    return any(body in lowered for body in _STANDARD_BODIES)
 
 
 def _focus_term(question: str) -> str:
