@@ -335,7 +335,7 @@ function ChatApp() {
           <div className="chat-header-inner">
             <div className="chat-header-titles">
               <h1>GSI Chatbot</h1>
-              <p className="chat-header-sub">Standards Q&amp;A — grounded in your ASTM &amp; ISO index</p>
+              <p className="chat-header-sub">Standards Q&amp;A — grounded in your ASTM, ISO, and GRI index</p>
             </div>
           </div>
           <div className="header-right">
