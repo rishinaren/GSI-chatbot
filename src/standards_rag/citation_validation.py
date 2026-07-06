@@ -145,13 +145,9 @@ def validate_answer_citations(
         remaining_order.append(idx)
 
     if not remaining_order:
-        rem = ", ".join(str(x) for x in sorted(set(dropped)))
-        note = (
-            "\n\nCitation verification: No inline citation markers passed lexical support checks "
-            f"(removed indices: {rem}). The citations list below still reflects "
-            "retrieved excerpts used for drafting."
-        )
-        return stripped.rstrip() + note, citations
+        # Every marker failed the lexical support check: strip them silently and keep the
+        # citations list (it still reflects the excerpts used for drafting). No user-facing note.
+        return stripped.rstrip(), citations
 
     old_to_new = {old: i + 1 for i, old in enumerate(remaining_order)}
 
@@ -166,8 +162,5 @@ def validate_answer_citations(
 
     new_citations = [citations[i - 1] for i in remaining_order]
 
-    note = (
-        "\n\nCitation verification: Removed citation markers whose preceding lines were not "
-        f"directly supported by the retrieved excerpts (indices: {', '.join(str(x) for x in sorted(set(dropped)))})."
-    )
-    return renumbered.rstrip() + note, new_citations
+    # Marker cleanup is silent — the diagnostic note used to leak into the user-facing answer.
+    return renumbered.rstrip(), new_citations
