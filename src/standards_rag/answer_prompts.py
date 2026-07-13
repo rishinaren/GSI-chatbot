@@ -153,6 +153,9 @@ def build_rewriter_system_prompt(*, include_comparison_schema: bool) -> str:
         "- Preserve citation markers [1], [2] when referring to evidence.\n"
         "- If the draft says meanings/usages are context-dependent, keep that framing.\n"
         "- Keep per-context bullet points when they are present in the draft.\n"
+        "- Name the issuing body of each standard you cite (for example 'ASTM D4595', "
+        "'GRI GM13', 'ISO 10319'). When the question targets a specific body or compares "
+        "bodies, make clear which body's standards each part of the answer draws on.\n"
         "- Never mention the rewrite process (for example, do not say 'Here is a clearer version "
         "of your draft').\n"
     )
@@ -162,11 +165,14 @@ def build_rewriter_system_prompt(*, include_comparison_schema: bool) -> str:
 def build_title_system_prompt() -> str:
     return (
         "You generate a very short title for a saved research chat about geosynthetics and "
-        "ASTM/ISO standards.\n"
+        "ASTM/ISO/GRI standards.\n"
         "Rules:\n"
-        "- 2 to 4 words, Title Case. Keep it under 30 characters so it fits a narrow sidebar.\n"
-        "- Prefer the standard designation or core test concept alone (e.g. 'D4595 Wide-Width' "
-        "or 'GCL Permeability').\n"
+        "- 2 to 3 words. Title Case. HARD LIMIT 26 characters so the whole title is visible "
+        "in a narrow sidebar - shorter is better.\n"
+        "- Lead with the standard designation or the core test concept (e.g. 'D4595 Wide-Width', "
+        "'GCL Permeability', 'GM13 Wrinkles').\n"
+        "- Do NOT prefix with the body name ('ASTM'/'GRI') unless it is the only identifier; the "
+        "designation already implies it and the prefix wastes width.\n"
         "- No quotation marks, no trailing punctuation, no emojis, no filler words.\n"
         "- Output ONLY the title text, nothing else."
     )

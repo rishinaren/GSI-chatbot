@@ -926,30 +926,52 @@ class StandardsRagEngine:
         self, question: str, conversation_id: str
     ) -> tuple[str, set[str] | None]:
         history = self._history.get(conversation_id, [])
+        documents = self.store.documents
+        all_bodies = {_document_body(doc) for doc in documents.values()} - {"UNKNOWN"}
+
+        previous = history[-1] if history else None
+        prior_bodies: set[str] = set()
+        if previous is not None:
+            for citation in previous.citations:
+                doc = documents.get(citation.document_id)
+                if doc is not None:
+                    body = _document_body(doc)
+                    if body != "UNKNOWN":
+                        prior_bodies.add(body)
+
+        target_bodies = _detect_body_targeting(question, prior_bodies, all_bodies)
+        body_ids = _document_ids_for_bodies(target_bodies, documents)
+
         if not history or SPECIFIC_STANDARD_RE.search(question):
-            return question, None
+            return question, body_ids
 
         if not _looks_like_follow_up(question):
-            return question, None
+            return question, body_ids
 
-        previous = history[-1]
         previous_document_ids = {citation.document_id for citation in previous.citations}
         previous_standards = " ".join(citation.standard_id for citation in previous.citations)
 
         # A *broadening* follow-up ("compare that to the ASTM approach", "what do other
         # standards say?") wants to pull in a DIFFERENT body than the prior answer.
         # Anchor retrieval on the prior *topic* (the previous question) so we stay on
-        # subject while widening across bodies, and do NOT scope to the previous answer's
-        # documents — otherwise we can only ever cite those same docs. The routing still
-        # sees the literal "compare…" question, so the comparison template kicks in.
+        # subject while widening across bodies, and do NOT lock to the previous answer's
+        # documents - otherwise we can only ever cite those same docs. The routing still
+        # sees the literal "compare..." question, so the comparison template kicks in.
         if _is_broadening_follow_up(question):
+            # If we resolved a target body set (an explicit body, or "other makers"
+            # excluding the prior body), scope to it but keep the prior answer's docs so
+            # both sides of the comparison stay retrievable.
+            if body_ids is not None:
+                scope = set(body_ids) | previous_document_ids
+                return previous.question, (scope or None)
             return previous.question, None
 
         # Default (narrowing) follow-up ("tell me more about that"): stay within the
-        # prior answer's documents.
-        return f"{previous.question}\nFollow-up: {question}\nPrior standards: {previous_standards}", (
-            previous_document_ids or None
-        )
+        # prior answer's documents, optionally further filtered to a named body.
+        scope = previous_document_ids or None
+        if body_ids is not None:
+            scope = ((scope & body_ids) or body_ids) if scope is not None else body_ids
+        return f"{previous.question}\nFollow-up: {question}\nPrior standards: {previous_standards}", scope
 
     def _should_clarify(self, question: str) -> bool:
         content_terms = [
@@ -1903,6 +1925,107 @@ def _is_broadening_follow_up(question: str) -> bool:
     if any(cue in lowered for cue in _BROADENING_CUES):
         return True
     return any(body in lowered for body in _STANDARD_BODIES)
+
+
+# --- Standards-body targeting -------------------------------------------------
+# The corpus mixes issuing bodies (ASTM, GRI, ISO). When a question targets a body -
+# explicitly ("the ASTM approach"), by exclusion ("non-ASTM methods", "other than
+# GRI"), or vaguely ("other standard makers", "alternatives in the literature") - we
+# scope retrieval to the right body's documents so the agent pulls from, and cites,
+# the intended source instead of the whole mixed index.
+_BODY_NAME_RE = {
+    "ASTM": re.compile(r"\bastm\b", re.IGNORECASE),
+    "GRI": re.compile(r"\bgri\b", re.IGNORECASE),
+    "ISO": re.compile(r"\biso\b", re.IGNORECASE),
+}
+# "other / alternative maker" language that widens to bodies the prior answer did not use.
+_OTHER_BODY_CUES = (
+    "other standard",
+    "other standards",
+    "other bodies",
+    "other body",
+    "other maker",
+    "other makers",
+    "other organization",
+    "other organizations",
+    "other organisations",
+    "other literature",
+    "different standard",
+    "different bodies",
+    "alternative",
+    "alternatives",
+    "elsewhere",
+)
+# Cues that a named body should be EXCLUDED rather than targeted ("non-ASTM", "besides GRI").
+_BODY_NEGATION_CUES = (
+    "non-",
+    "other than",
+    "besides",
+    "apart from",
+    "instead of",
+    "rather than",
+    "aside from",
+)
+
+
+def _document_body(document: StandardDocument) -> str:
+    """Canonical issuing body, inferring GRI/ISO/ASTM for legacy docs stored as UNKNOWN."""
+    body = (document.issuing_body or "").upper()
+    if body in {"ASTM", "GRI", "ISO"}:
+        return body
+    sid = document.standard_id.upper().replace("ASTM", "").strip().lstrip("-_ ")
+    if sid.startswith("GRI") or re.match(r"^G[A-Z]\d", sid):
+        return "GRI"
+    if sid.startswith("ISO"):
+        return "ISO"
+    if re.match(r"^[A-Z]\d", sid):
+        return "ASTM"
+    return body or "UNKNOWN"
+
+
+def _detect_body_targeting(
+    question: str,
+    prior_bodies: set[str],
+    all_bodies: set[str],
+) -> set[str] | None:
+    """Bodies to scope retrieval to, or None to search every body.
+
+    ``prior_bodies`` are the bodies the previous answer cited (used to resolve vague
+    "other makers" requests). A specific designation (e.g. D4595) returns None so the
+    designation-scoping path handles it. Returns None whenever the request resolves to
+    "all bodies", leaving general questions untouched.
+    """
+    if SPECIFIC_STANDARD_RE.search(question):
+        return None
+    if not all_bodies:
+        return None
+    lowered = question.lower()
+    named = {name for name, pattern in _BODY_NAME_RE.items() if pattern.search(question)}
+    negated = any(cue in lowered for cue in _BODY_NEGATION_CUES)
+    wants_other = any(cue in lowered for cue in _OTHER_BODY_CUES)
+
+    if named and (negated or wants_other):
+        candidate = all_bodies - named           # "non-ASTM", "other than GRI"
+    elif named:
+        candidate = named & all_bodies           # "the ASTM approach"
+    elif wants_other:
+        candidate = all_bodies - prior_bodies    # "other standard makers"
+    else:
+        return None
+
+    candidate &= all_bodies
+    if not candidate or candidate == all_bodies:
+        return None
+    return candidate
+
+
+def _document_ids_for_bodies(
+    bodies: set[str] | None, documents: dict[str, StandardDocument]
+) -> set[str] | None:
+    if not bodies:
+        return None
+    ids = {doc.document_id for doc in documents.values() if _document_body(doc) in bodies}
+    return ids or None
 
 
 def _focus_term(question: str) -> str:

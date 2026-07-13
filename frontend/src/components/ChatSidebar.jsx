@@ -54,7 +54,46 @@ function ChevronLeft() {
   );
 }
 
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.3-4.3" />
+    </svg>
+  );
+}
+
+function ChatBubbleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.6-.8L3 21l1.9-5.4A8.38 8.38 0 0 1 4 12a8.5 8.5 0 0 1 17 -0.5z" />
+    </svg>
+  );
+}
+
+function EnterHint() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 10l-4 4 4 4" />
+      <path d="M5 14h10a4 4 0 0 0 4-4V6" />
+    </svg>
+  );
+}
+
 const MENU_WIDTH = 196;
+
+// Whole-day difference between now and an ISO timestamp, rendered as the sidebar
+// wants it ("today" / "yesterday" / "N days ago").
+function relativeDays(iso) {
+  if (!iso) return "";
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return "";
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const days = Math.round((startOfDay(new Date()) - startOfDay(then)) / 86400000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  return `${days} days ago`;
+}
 
 export default function ChatSidebar({
   conversations,
@@ -76,6 +115,7 @@ export default function ChatSidebar({
   const [openProjectId, setOpenProjectId] = useState(null);
   const [menu, setMenu] = useState(null);
   const [prompt, setPrompt] = useState(null);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const closeMenu = () => setMenu(null);
 
@@ -180,6 +220,15 @@ export default function ChatSidebar({
       <button type="button" className="sidebar-new-chat" onClick={onNewChat}>
         <span className="plus" aria-hidden="true">+</span>
         New chat
+      </button>
+
+      <button
+        type="button"
+        className="sidebar-search-btn"
+        onClick={() => setSearchOpen(true)}
+      >
+        <SearchIcon />
+        Search chats
       </button>
 
       <div className="sidebar-tabs" role="tablist">
@@ -475,7 +524,129 @@ export default function ChatSidebar({
           }}
         />
       ) : null}
+
+      {searchOpen ? (
+        <ChatSearchModal
+          conversations={conversations}
+          projects={projects}
+          onSelect={(conversationId) => {
+            setSearchOpen(false);
+            onSelect(conversationId);
+          }}
+          onClose={() => setSearchOpen(false)}
+        />
+      ) : null}
     </aside>
+  );
+}
+
+function ChatSearchModal({ conversations, projects, onSelect, onClose }) {
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const inputRef = useRef(null);
+  const listRef = useRef(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const q = query.trim().toLowerCase();
+  const projectName = (id) =>
+    (projects.find((project) => project.project_id === id)?.name || "").toLowerCase();
+
+  const matches = conversations
+    .filter((conversation) => {
+      if (!q) return true;
+      return (
+        (conversation.title || "").toLowerCase().includes(q) ||
+        projectName(conversation.project_id).includes(q)
+      );
+    })
+    .slice()
+    .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+
+  // Keep the highlighted row valid as the result set shrinks/grows.
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [q]);
+  const clampedIndex = Math.min(activeIndex, Math.max(matches.length - 1, 0));
+
+  function onInputKeyDown(event) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.min(index + 1, matches.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const chosen = matches[clampedIndex];
+      if (chosen) onSelect(chosen.conversation_id);
+    }
+  }
+
+  return (
+    <div className="search-overlay" onClick={onClose}>
+      <div
+        className="search-card"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-label="Search chats"
+      >
+        <div className="search-head">
+          <span className="search-head-icon" aria-hidden="true">
+            <SearchIcon />
+          </span>
+          <input
+            ref={inputRef}
+            className="search-input"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={onInputKeyDown}
+            placeholder="Search chats and projects"
+            aria-label="Search chats and projects"
+          />
+          <button type="button" className="search-close" aria-label="Close search" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <div className="search-results" ref={listRef}>
+          {!matches.length ? (
+            <div className="search-empty">
+              {q ? "No chats match your search." : "No saved chats yet."}
+            </div>
+          ) : (
+            matches.map((conversation, index) => (
+              <button
+                key={conversation.conversation_id}
+                type="button"
+                className={`search-result ${index === clampedIndex ? "active" : ""}`}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => onSelect(conversation.conversation_id)}
+              >
+                <span className="search-result-icon" aria-hidden="true">
+                  <ChatBubbleIcon />
+                </span>
+                <span className="search-result-title">{conversation.title}</span>
+                {index === clampedIndex ? (
+                  <span className="search-result-enter" aria-hidden="true">
+                    <EnterHint />
+                  </span>
+                ) : (
+                  <span className="search-result-time">{relativeDays(conversation.updated_at)}</span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
