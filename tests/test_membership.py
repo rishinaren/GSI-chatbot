@@ -1,4 +1,6 @@
+import json
 import unittest
+from unittest import mock
 
 from standards_rag.membership import (
     EmailCodeService,
@@ -8,6 +10,10 @@ from standards_rag.membership import (
     MembershipTokenService,
     PlaceholderBillingProvider,
     PlaceholderMemberDirectory,
+    ResendEmailCodeSender,
+    SesEmailCodeSender,
+    SmtpEmailCodeSender,
+    _build_email_code_sender_from_env,
     _jwt_decode,
     _jwt_encode,
 )
@@ -138,6 +144,115 @@ class SubscribeCheckoutTests(unittest.TestCase):
         service = _build_service()
         with self.assertRaises(MembershipError):
             service.subscribe("brand@new.com", "short", {})
+
+
+def _env(**overrides: str) -> mock._patch_dict:
+    """Clears every email-transport var, then applies the given overrides."""
+    base = dict.fromkeys(
+        (
+            "MEMBERSHIP_EMAIL_PROVIDER",
+            "MEMBERSHIP_CODE_EMAIL_FROM",
+            "RESEND_API_KEY",
+            "SMTP_HOST",
+            "SMTP_PORT",
+            "SMTP_USERNAME",
+            "SMTP_PASSWORD",
+            "SMTP_STARTTLS",
+        ),
+        "",
+    )
+    return mock.patch.dict("os.environ", {**base, **overrides}, clear=False)
+
+
+class EmailSenderSelectionTests(unittest.TestCase):
+    def test_auto_prefers_resend(self) -> None:
+        with _env(RESEND_API_KEY="re_test", SMTP_HOST="smtp.example.com", MEMBERSHIP_CODE_EMAIL_FROM="a@b.org"):
+            self.assertIsInstance(_build_email_code_sender_from_env(), ResendEmailCodeSender)
+
+    def test_auto_falls_back_to_smtp_then_ses(self) -> None:
+        with _env(SMTP_HOST="smtp.example.com", MEMBERSHIP_CODE_EMAIL_FROM="a@b.org"):
+            self.assertIsInstance(_build_email_code_sender_from_env(), SmtpEmailCodeSender)
+        with _env(MEMBERSHIP_CODE_EMAIL_FROM="a@b.org"):
+            self.assertIsInstance(_build_email_code_sender_from_env(), SesEmailCodeSender)
+
+    def test_explicit_provider_wins(self) -> None:
+        with _env(
+            MEMBERSHIP_EMAIL_PROVIDER="smtp",
+            RESEND_API_KEY="re_test",
+            SMTP_HOST="smtp.example.com",
+            MEMBERSHIP_CODE_EMAIL_FROM="a@b.org",
+        ):
+            self.assertIsInstance(_build_email_code_sender_from_env(), SmtpEmailCodeSender)
+
+    def test_missing_credentials_fall_back_to_logging(self) -> None:
+        # No transport configured at all.
+        with _env():
+            self.assertIsInstance(_build_email_code_sender_from_env(), LoggingEmailCodeSender)
+        # Provider chosen but no sender address to send from.
+        with _env(MEMBERSHIP_EMAIL_PROVIDER="resend", RESEND_API_KEY="re_test"):
+            self.assertIsInstance(_build_email_code_sender_from_env(), LoggingEmailCodeSender)
+        # Sender address present but the provider's own credential is missing.
+        with _env(MEMBERSHIP_EMAIL_PROVIDER="resend", MEMBERSHIP_CODE_EMAIL_FROM="a@b.org"):
+            self.assertIsInstance(_build_email_code_sender_from_env(), LoggingEmailCodeSender)
+        # Typo'd provider name must not silently send nothing.
+        with _env(MEMBERSHIP_EMAIL_PROVIDER="mailgunn", MEMBERSHIP_CODE_EMAIL_FROM="a@b.org"):
+            self.assertIsInstance(_build_email_code_sender_from_env(), LoggingEmailCodeSender)
+
+
+class ResendSenderTests(unittest.TestCase):
+    def test_posts_expected_payload(self) -> None:
+        sender = ResendEmailCodeSender("re_test_key", "GSI <login@gsi.org>")
+        captured: dict = {}
+
+        def fake_urlopen(request, timeout=None):  # noqa: ANN001 - test double
+            captured["url"] = request.full_url
+            captured["headers"] = request.headers
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return mock.MagicMock(__enter__=lambda s: s, __exit__=lambda *a: False, read=lambda: b"{}")
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen):
+            sender.send("user@example.com", "123456")
+
+        self.assertEqual(captured["url"], "https://api.resend.com/emails")
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer re_test_key")
+        # Cloudflare 403s urllib's default agent, so a custom one is mandatory.
+        self.assertEqual(captured["headers"]["User-agent"], ResendEmailCodeSender.USER_AGENT)
+        self.assertEqual(captured["body"]["from"], "GSI <login@gsi.org>")
+        self.assertEqual(captured["body"]["to"], ["user@example.com"])
+        self.assertIn("123456", captured["body"]["text"])
+        self.assertIn("123456", captured["body"]["html"])
+
+
+class SmtpSenderTests(unittest.TestCase):
+    def test_starttls_and_login_on_587(self) -> None:
+        client = mock.MagicMock()
+        client.__enter__.return_value = client
+        with mock.patch("smtplib.SMTP", return_value=client) as smtp:
+            SmtpEmailCodeSender(
+                "smtp-relay.example.com",
+                port=587,
+                username="user",
+                password="pass",
+                from_address="login@gsi.org",
+            ).send("user@example.com", "654321")
+
+        smtp.assert_called_once_with("smtp-relay.example.com", 587, timeout=15)
+        client.starttls.assert_called_once()
+        client.login.assert_called_once_with("user", "pass")
+        message = client.send_message.call_args.args[0]
+        self.assertEqual(message["To"], "user@example.com")
+        self.assertIn("654321", message.get_body(("plain",)).get_content())
+
+    def test_implicit_tls_on_465(self) -> None:
+        client = mock.MagicMock()
+        client.__enter__.return_value = client
+        with mock.patch("smtplib.SMTP_SSL", return_value=client) as smtp_ssl:
+            SmtpEmailCodeSender(
+                "smtp-relay.example.com", port=465, from_address="login@gsi.org"
+            ).send("user@example.com", "111222")
+
+        smtp_ssl.assert_called_once_with("smtp-relay.example.com", 465, timeout=15)
+        client.starttls.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -15,9 +15,9 @@ Two audiences share the chatbot, with deliberately different login flows:
   (``CognitoSubscriberAuth`` behind the ``SubscriberAuthProvider`` seam), so an
   existing Cognito login keeps working and new signups verify their email
   through Cognito. The per-login code is layered on via ``EmailCodeService``
-  (shown on-screen in demo mode); once SES is out of sandbox it can move to
-  native Cognito email MFA. Billing is a ``BillingProvider`` placeholder (swap
-  for Stripe).
+  (shown on-screen in demo mode), delivered by a pluggable transport — Resend by
+  default, any SMTP relay, or SES — chosen with env vars alone. Billing is a
+  ``BillingProvider`` placeholder (swap for Stripe).
 
 Everything is demo-functional today, with obvious seams for the real
 integrations. Session tokens are stdlib-signed HS256 JWTs (no external dep) so
@@ -235,10 +235,11 @@ class CognitoSubscriberAuth:
 
     Subscribers sign in with their actual Cognito credentials (so an existing
     account keeps working), and new subscribers are registered + email-verified
-    through Cognito. A per-login one-time code is layered on top (see
-    ``EmailCodeService``); once SES is out of sandbox this can move to native
-    Cognito email MFA. Cognito's own tokens are only used here to *validate* the
-    password — the session itself is a membership token minted after the code.
+    through Cognito. Those signup emails go out via ``COGNITO_DEFAULT`` (Cognito's
+    own sender, capped at 50/day), *not* SES — so they were never affected by the
+    SES sandbox. A per-login one-time code is layered on top (see
+    ``EmailCodeService``). Cognito's own tokens are only used here to *validate*
+    the password — the session itself is a membership token minted after the code.
     """
 
     def _err(self, exc: Exception, default_status: int) -> MembershipError:
@@ -279,8 +280,32 @@ class CognitoSubscriberAuth:
 
 
 # ---------------------------------------------------------------------------
-# Email one-time code (2FA for subscribers). Swap seam for real email.
+# Email one-time code (2FA for subscribers).
+#
+# The transport is pluggable so the provider can be swapped with env vars alone
+# (see ``_build_code_service_from_env``). Amazon SES is *not* the default: its
+# production-access request was denied, leaving the account in sandbox where only
+# pre-verified recipients receive mail. ``ResendEmailCodeSender`` (HTTP API) and
+# ``SmtpEmailCodeSender`` (any SMTP relay — Brevo, Mailjet, SMTP2GO, …) both set
+# up in minutes with no human review. See HANDOFF §6.8.
 # ---------------------------------------------------------------------------
+
+
+CODE_EMAIL_SUBJECT = "Your GSI Chatbot login code"
+
+
+def _render_code_email(code: str) -> tuple[str, str]:
+    """Returns the (plain-text, html) bodies for a login-code email."""
+    text = (
+        f"Your GSI Chatbot login code is {code}.\n\n"
+        "It expires in 10 minutes. If you didn't try to sign in, ignore this email."
+    )
+    html = (
+        f'<p>Your GSI Chatbot login code is <strong style="font-size:1.3em;'
+        f'letter-spacing:2px">{code}</strong>.</p>'
+        "<p>It expires in 10 minutes. If you didn't try to sign in, ignore this email.</p>"
+    )
+    return text, html
 
 
 class EmailCodeSender(Protocol):
@@ -296,17 +321,127 @@ class LoggingEmailCodeSender:
     mailbox.
     """
 
+    PROVIDER_NAME = "log"
+
     def send(self, email: str, code: str) -> None:
         logger.info("[membership] email code for %s: %s", email, code)
 
 
-class SesEmailCodeSender:
-    """Emails the login code via Amazon SES (real per-login 2FA delivery).
+class ResendEmailCodeSender:
+    """Emails the login code via Resend's HTTP API (the default transport).
 
-    Enabled by setting ``MEMBERSHIP_CODE_EMAIL_FROM`` to a verified SES sender.
-    Note: while SES is in sandbox it only delivers to verified recipients — see
-    HANDOFF §6.8 for the production-access path.
+    Setup is self-serve and immediate: create an account, add a sending domain
+    (3 DNS records, verified automatically — no human review, unlike SES
+    production access), then set ``RESEND_API_KEY`` + ``MEMBERSHIP_CODE_EMAIL_FROM``.
+    Free tier covers 3,000 emails/month (100/day), which is far above login-code
+    volume. Uses ``urllib`` so no new dependency is needed.
     """
+
+    PROVIDER_NAME = "resend"
+    ENDPOINT = "https://api.resend.com/emails"
+    USER_AGENT = "gsi-standards-rag/1.0"
+
+    def __init__(self, api_key: str, from_address: str, *, timeout: int = 15) -> None:
+        self._api_key = api_key
+        self._from = from_address
+        self._timeout = timeout
+
+    def send(self, email: str, code: str) -> None:
+        import urllib.error
+        import urllib.request
+
+        text, html = _render_code_email(code)
+        payload = {
+            "from": self._from,
+            "to": [email],
+            "subject": CODE_EMAIL_SUBJECT,
+            "text": text,
+            "html": html,
+        }
+        request = urllib.request.Request(
+            self.ENDPOINT,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+                # Required: Cloudflare fronts api.resend.com and rejects urllib's
+                # default "Python-urllib/3.x" agent with a 403 (error code 1010).
+                "User-Agent": self.USER_AGENT,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"Resend rejected the send ({exc.code}): {detail}") from exc
+
+
+class SmtpEmailCodeSender:
+    """Emails the login code over plain SMTP — works with any relay.
+
+    The portable escape hatch: Brevo, Mailjet, SMTP2GO, Mailgun, Postmark and
+    Gmail all speak SMTP, so switching providers is a credentials change. Useful
+    when there is no sending domain yet, since providers like Brevo will verify a
+    single sender *address* (a click in that inbox) instead of DNS records.
+    """
+
+    PROVIDER_NAME = "smtp"
+
+    def __init__(
+        self,
+        host: str,
+        *,
+        port: int = 587,
+        username: str | None = None,
+        password: str | None = None,
+        from_address: str,
+        use_tls: bool = True,
+        timeout: int = 15,
+    ) -> None:
+        self._host = host
+        self._port = port
+        self._username = username
+        self._password = password
+        self._from = from_address
+        self._use_tls = use_tls
+        self._timeout = timeout
+
+    def send(self, email: str, code: str) -> None:
+        import smtplib
+        from email.message import EmailMessage
+
+        text, html = _render_code_email(code)
+        message = EmailMessage()
+        message["Subject"] = CODE_EMAIL_SUBJECT
+        message["From"] = self._from
+        message["To"] = email
+        message.set_content(text)
+        message.add_alternative(html, subtype="html")
+
+        # Port 465 is implicit TLS; everything else upgrades with STARTTLS.
+        if self._port == 465:
+            client: smtplib.SMTP = smtplib.SMTP_SSL(self._host, self._port, timeout=self._timeout)
+        else:
+            client = smtplib.SMTP(self._host, self._port, timeout=self._timeout)
+        with client:
+            if self._port != 465 and self._use_tls:
+                client.starttls()
+            if self._username and self._password:
+                client.login(self._username, self._password)
+            client.send_message(message)
+
+
+class SesEmailCodeSender:
+    """Emails the login code via Amazon SES.
+
+    Retained as an option (opt in with ``MEMBERSHIP_EMAIL_PROVIDER=ses``) but no
+    longer the default: SES production access was denied, so the account sends
+    only to pre-verified recipients. See HANDOFF §6.8.
+    """
+
+    PROVIDER_NAME = "ses"
 
     def __init__(self, from_address: str, *, region: str | None = None) -> None:
         self._from = from_address
@@ -315,27 +450,14 @@ class SesEmailCodeSender:
     def send(self, email: str, code: str) -> None:
         import boto3  # lazy: only needed when SES delivery is configured
 
+        text, html = _render_code_email(code)
         client = boto3.client("ses", region_name=self._region)
         client.send_email(
             Source=self._from,
             Destination={"ToAddresses": [email]},
             Message={
-                "Subject": {"Data": "Your GSI Chatbot login code"},
-                "Body": {
-                    "Text": {
-                        "Data": (
-                            f"Your GSI Chatbot login code is {code}.\n\n"
-                            "It expires in 10 minutes. If you didn't try to sign in, ignore this email."
-                        )
-                    },
-                    "Html": {
-                        "Data": (
-                            f"<p>Your GSI Chatbot login code is <strong style=\"font-size:1.3em;"
-                            f"letter-spacing:2px\">{code}</strong>.</p>"
-                            "<p>It expires in 10 minutes. If you didn't try to sign in, ignore this email.</p>"
-                        )
-                    },
-                },
+                "Subject": {"Data": CODE_EMAIL_SUBJECT},
+                "Body": {"Text": {"Data": text}, "Html": {"Data": html}},
             },
         )
 
@@ -366,6 +488,12 @@ class EmailCodeService:
         # also returned on-screen, so a failed send is best-effort.
         self._strict = strict_delivery
         self._pending: dict[str, _PendingCode] = {}
+
+    @property
+    def provider_name(self) -> str:
+        """Label for the configured transport, surfaced by ``public_config`` so the
+        deployed provider can be confirmed without shell access."""
+        return str(getattr(self._sender, "PROVIDER_NAME", "custom"))
 
     def issue(self, email: str) -> str:
         code = f"{secrets.randbelow(1_000_000):06d}"
@@ -517,6 +645,7 @@ class MembershipService:
             "member_login_enabled": True,
             "subscriber_enabled": True,
             "demo_mode": self.demo_mode,
+            "email_provider": self.code_service.provider_name,
             "plan": PLAN,
         }
 
@@ -667,15 +796,75 @@ def _membership_secret() -> str:
     return "gsi-membership-dev-secret-change-me"
 
 
-def _build_code_service_from_env(demo_mode: bool) -> EmailCodeService:
+def _build_email_code_sender_from_env() -> EmailCodeSender:
+    """Picks the login-code email transport from env vars.
+
+    ``MEMBERSHIP_EMAIL_PROVIDER`` selects explicitly (``resend`` | ``smtp`` |
+    ``ses`` | ``log``); the default ``auto`` infers it from whichever credentials
+    are present, preferring Resend, then SMTP, then SES. Every provider shares
+    ``MEMBERSHIP_CODE_EMAIL_FROM`` as the sender address, so switching is a
+    matter of setting a key — no code change and no redeploy of the image.
+    """
+    provider = os.getenv("MEMBERSHIP_EMAIL_PROVIDER", "auto").strip().lower() or "auto"
     from_address = os.getenv("MEMBERSHIP_CODE_EMAIL_FROM", "").strip()
-    if from_address:
-        sender: EmailCodeSender = SesEmailCodeSender(from_address)
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    smtp_host = os.getenv("SMTP_HOST", "").strip()
+
+    if provider == "auto":
+        if resend_key:
+            provider = "resend"
+        elif smtp_host:
+            provider = "smtp"
+        elif from_address:
+            provider = "ses"
+        else:
+            provider = "log"
+
+    if provider == "log":
+        return LoggingEmailCodeSender()
+
+    if not from_address:
+        logger.warning(
+            "MEMBERSHIP_EMAIL_PROVIDER=%s but MEMBERSHIP_CODE_EMAIL_FROM is unset — "
+            "falling back to logging the code.",
+            provider,
+        )
+        return LoggingEmailCodeSender()
+
+    if provider == "resend":
+        if not resend_key:
+            logger.warning("RESEND_API_KEY is unset — falling back to logging the code.")
+            return LoggingEmailCodeSender()
+        logger.info("Membership login codes will be emailed via Resend from %s", from_address)
+        return ResendEmailCodeSender(resend_key, from_address)
+
+    if provider == "smtp":
+        if not smtp_host:
+            logger.warning("SMTP_HOST is unset — falling back to logging the code.")
+            return LoggingEmailCodeSender()
+        logger.info(
+            "Membership login codes will be emailed via SMTP (%s) from %s", smtp_host, from_address
+        )
+        return SmtpEmailCodeSender(
+            smtp_host,
+            port=int(os.getenv("SMTP_PORT", "587") or 587),
+            username=os.getenv("SMTP_USERNAME", "").strip() or None,
+            password=os.getenv("SMTP_PASSWORD", "") or None,
+            from_address=from_address,
+            use_tls=_bool_env("SMTP_STARTTLS", True),
+        )
+
+    if provider == "ses":
         logger.info("Membership login codes will be emailed via SES from %s", from_address)
-    else:
-        sender = LoggingEmailCodeSender()
+        return SesEmailCodeSender(from_address)
+
+    logger.warning("Unknown MEMBERSHIP_EMAIL_PROVIDER=%r — falling back to logging the code.", provider)
+    return LoggingEmailCodeSender()
+
+
+def _build_code_service_from_env(demo_mode: bool) -> EmailCodeService:
     # Out of demo mode the on-screen code is hidden, so delivery must be reliable.
-    return EmailCodeService(sender, strict_delivery=not demo_mode)
+    return EmailCodeService(_build_email_code_sender_from_env(), strict_delivery=not demo_mode)
 
 
 def build_membership_service_from_env() -> MembershipService:
