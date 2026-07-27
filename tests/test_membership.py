@@ -3,6 +3,7 @@ import unittest
 from unittest import mock
 
 from standards_rag.membership import (
+    DEV_MEMBERSHIP_SECRET,
     EmailCodeService,
     LoggingEmailCodeSender,
     MembershipError,
@@ -16,6 +17,7 @@ from standards_rag.membership import (
     _build_email_code_sender_from_env,
     _jwt_decode,
     _jwt_encode,
+    _membership_secret,
 )
 
 
@@ -197,6 +199,40 @@ class EmailSenderSelectionTests(unittest.TestCase):
         # Typo'd provider name must not silently send nothing.
         with _env(MEMBERSHIP_EMAIL_PROVIDER="mailgunn", MEMBERSHIP_CODE_EMAIL_FROM="a@b.org"):
             self.assertIsInstance(_build_email_code_sender_from_env(), LoggingEmailCodeSender)
+
+
+class MembershipSecretTests(unittest.TestCase):
+    """The dev fallback key is a constant in a public repo, so it must never be
+    reachable outside demo mode (it briefly was, in prod — fixed 2026-07-27)."""
+
+    def test_missing_secret_outside_demo_mode_refuses_to_start(self) -> None:
+        with mock.patch.dict("os.environ", {"MEMBERSHIP_JWT_SECRET": ""}, clear=False):
+            with self.assertRaises(RuntimeError) as ctx:
+                _membership_secret(demo_mode=False)
+            self.assertIn("MEMBERSHIP_JWT_SECRET", str(ctx.exception))
+
+    def test_demo_mode_falls_back(self) -> None:
+        with mock.patch.dict("os.environ", {"MEMBERSHIP_JWT_SECRET": ""}, clear=False):
+            self.assertEqual(_membership_secret(demo_mode=True), DEV_MEMBERSHIP_SECRET)
+
+    def test_configured_secret_used_in_both_modes(self) -> None:
+        with mock.patch.dict("os.environ", {"MEMBERSHIP_JWT_SECRET": "  real-secret  "}, clear=False):
+            self.assertEqual(_membership_secret(demo_mode=False), "real-secret")
+            self.assertEqual(_membership_secret(demo_mode=True), "real-secret")
+
+    def test_forged_token_rejected_under_a_real_secret(self) -> None:
+        forged = _jwt_encode(
+            {
+                "iss": "gsi-membership",
+                "token_use": "membership",
+                "sub": "member:victim@gsi.org",
+                "email": "victim@gsi.org",
+                "account_type": "member",
+                "exp": 9_999_999_999,
+            },
+            DEV_MEMBERSHIP_SECRET,
+        )
+        self.assertIsNone(MembershipTokenService("a-real-deployed-secret").validate(forged))
 
 
 class ResendSenderTests(unittest.TestCase):

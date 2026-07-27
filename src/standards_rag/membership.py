@@ -787,13 +787,27 @@ def _build_member_directory_from_env() -> MemberDirectory:
     return directory
 
 
-def _membership_secret() -> str:
+DEV_MEMBERSHIP_SECRET = "gsi-membership-dev-secret-change-me"
+
+
+def _membership_secret(*, demo_mode: bool) -> str:
     secret = os.getenv("MEMBERSHIP_JWT_SECRET", "").strip()
     if secret:
         return secret
+    if not demo_mode:
+        # This shipped to production once (fixed 2026-07-27): the dev fallback below
+        # is a constant in a PUBLIC repo, so anyone could mint a valid session token
+        # and read/write any user's chats. Outside demo mode, refuse to start rather
+        # than boot with a forgeable signing key.
+        raise RuntimeError(
+            "MEMBERSHIP_JWT_SECRET is not set. Session tokens would be signed with a "
+            "publicly known default, letting anyone forge a login. Set the secret "
+            "(App Runner references Secrets Manager 'gsi/membership-jwt-secret'), or "
+            "set MEMBERSHIP_DEMO_MODE=1 for local/demo runs."
+        )
     # Deterministic dev fallback so tokens survive a reload in local/demo runs.
-    logger.warning("MEMBERSHIP_JWT_SECRET not set — using an insecure dev default.")
-    return "gsi-membership-dev-secret-change-me"
+    logger.warning("MEMBERSHIP_JWT_SECRET not set — using an insecure dev default (demo mode).")
+    return DEV_MEMBERSHIP_SECRET
 
 
 def _build_email_code_sender_from_env() -> EmailCodeSender:
@@ -873,7 +887,7 @@ def build_membership_service_from_env() -> MembershipService:
         member_directory=_build_member_directory_from_env(),
         subscriber_auth=CognitoSubscriberAuth(),
         code_service=_build_code_service_from_env(demo_mode),
-        token_service=MembershipTokenService(_membership_secret()),
+        token_service=MembershipTokenService(_membership_secret(demo_mode=demo_mode)),
         billing=PlaceholderBillingProvider(),
         demo_mode=demo_mode,
     )
