@@ -7,7 +7,7 @@ authors = [{ name = "GSI" }]
 dependencies = []
 
 [project.optional-dependencies]
-api = ["fastapi", "uvicorn"]
+api = ["fastapi", "uvicorn", "python-multipart"]
 pdf = ["pymupdf"]
 pinecone = ["pinecone>=6,<9"]
 llm = ["openai>=1.40.0"]

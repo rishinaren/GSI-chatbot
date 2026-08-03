@@ -148,6 +148,12 @@ class PineconeHybridStore(InMemoryStandardsStore):
         for _, chunk_list in flattened:
             self.upsert_embeddings(chunk_list)
 
+    def delete_chunks(self, chunk_ids: Iterable[str]) -> None:
+        """Delete chunk vectors from the standards namespace (Pinecone caps ids at 1000)."""
+        ids = [str(chunk_id) for chunk_id in chunk_ids]
+        for start in range(0, len(ids), 1000):
+            self._index.delete(ids=ids[start : start + 1000], namespace=self.config.namespace)
+
     def upsert_video_chunks(self, vectors: list[dict[str, object]]) -> None:
         """Upsert pre-built video-transcript vectors into the isolated video namespace."""
         for start in range(0, len(vectors), self.config.batch_size):

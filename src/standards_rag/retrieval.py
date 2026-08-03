@@ -24,13 +24,8 @@ def resolve_document_pdf_path(document: StandardDocument) -> Path | None:
     """
     if not document.source_path:
         return None
-    path = Path(document.source_path).expanduser()
-    try:
-        if not path.is_file():
-            return None
-    except OSError:
-        return None
-    if path.suffix.lower() != ".pdf":
+    path = _existing_pdf_path(document.source_path)
+    if path is None:
         return None
     resolved = path.resolve()
     root_raw = os.getenv("STANDARDS_PDF_ROOT")
@@ -41,6 +36,28 @@ def resolve_document_pdf_path(document: StandardDocument) -> Path | None:
         except ValueError:
             return None
     return resolved
+
+
+def _existing_pdf_path(source_path: str) -> Path | None:
+    """Locate a stored PDF from its recorded (usually relative) path.
+
+    ``source_path`` is stored relative to the project root, which is also the
+    working directory in the container - but not necessarily in every process
+    that loads the index, so fall back to resolving against the project root
+    before giving up. Containment under ``STANDARDS_PDF_ROOT`` is still enforced
+    by the caller either way.
+    """
+    from standards_rag.env_bootstrap import project_root
+
+    candidate = Path(source_path).expanduser()
+    for path in (candidate, project_root() / candidate):
+        try:
+            if path.is_file() and path.suffix.lower() == ".pdf":
+                return path
+        except OSError:
+            continue
+    return None
+
 
 # Headings / early body lines that usually carry applicability vs procedural content.
 _SCOPE_SECTION_HINT = re.compile(
@@ -215,6 +232,21 @@ class InMemoryStandardsStore:
             for chunk in chunks:
                 self.chunks[chunk.chunk_id] = chunk
         self._reindex()
+
+    def remove_document(self, document_id: str) -> list[str]:
+        """Drop a document and its chunks; returns the chunk ids that were removed.
+
+        Used when a newer revision of the same standard is ingested - re-chunking
+        mints fresh chunk ids, so the previous ones must be retired explicitly.
+        """
+        removed = [
+            chunk_id for chunk_id, chunk in self.chunks.items() if chunk.document_id == document_id
+        ]
+        for chunk_id in removed:
+            self.chunks.pop(chunk_id, None)
+        self.documents.pop(document_id, None)
+        self._reindex()
+        return removed
 
     def search(
         self,

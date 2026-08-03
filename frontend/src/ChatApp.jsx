@@ -6,6 +6,7 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import ChatSidebar from "./components/ChatSidebar";
 import AuthExperience from "./components/AuthExperience";
+import AdminLibrary from "./components/AdminLibrary";
 import {
   ApiError,
   assignConversationToProject,
@@ -13,6 +14,7 @@ import {
   createProject,
   deleteConversation,
   deleteProject,
+  getAdminConfig,
   getConversation,
   listConversations,
   listProjects,
@@ -87,6 +89,8 @@ function ChatApp() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [followUpSuggestions, setFollowUpSuggestions] = useState([]);
+  const [canManageLibrary, setCanManageLibrary] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
   const canSubmit = useMemo(() => question.trim().length > 0 && !isLoading, [question, isLoading]);
   const hasStarted = messages.length > 0;
@@ -103,6 +107,7 @@ function ChatApp() {
     }
     try {
       await refreshSidebar();
+      void refreshAdminAccess();
       setAuthed(true);
     } catch (refreshError) {
       if (refreshError instanceof ApiError && refreshError.status === 401) {
@@ -130,9 +135,21 @@ function ChatApp() {
     await Promise.all([refreshConversations(), refreshProjects()]);
   }
 
+  // The library entry point only appears for accounts on the admin allowlist;
+  // the API enforces the same rule on every library call.
+  async function refreshAdminAccess() {
+    try {
+      const config = await getAdminConfig();
+      setCanManageLibrary(Boolean(config.is_admin));
+    } catch {
+      setCanManageLibrary(false);
+    }
+  }
+
   async function handleSignedIn() {
     setError("");
     setAuthed(true);
+    void refreshAdminAccess();
     try {
       await refreshSidebar();
     } catch (refreshError) {
@@ -311,6 +328,8 @@ function ChatApp() {
         onAssignToProject={handleAssignToProject}
         userEmail={authed ? getUserEmail() : ""}
         canSignOut={authed}
+        canManageLibrary={authed && canManageLibrary}
+        onOpenLibrary={() => setLibraryOpen(true)}
         onSignOut={() => {
           signOut();
           window.location.reload();
@@ -352,6 +371,10 @@ function ChatApp() {
           <EmptyState error={error} composerProps={composerProps} />
         )}
       </div>
+
+      {libraryOpen && canManageLibrary ? (
+        <AdminLibrary onClose={() => setLibraryOpen(false)} />
+      ) : null}
 
       {showAuthModal ? <AuthExperience onSignedIn={handleSignedIn} connectionError={error} /> : null}
     </div>

@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from standards_rag.citation_validation import validate_answer_citations
 from standards_rag.conversation_store import ConversationStore
+from standards_rag.library import canonical_issuing_body
 from standards_rag.models import Citation, StandardDocument
 from standards_rag.retrieval import InMemoryStandardsStore, SearchResult, resolve_document_pdf_path
 from standards_rag.units import convert_measurement, extract_measurements, format_conversion
@@ -1968,19 +1969,10 @@ _BODY_NEGATION_CUES = (
 )
 
 
-def _document_body(document: StandardDocument) -> str:
-    """Canonical issuing body, inferring GRI/ISO/ASTM for legacy docs stored as UNKNOWN."""
-    body = (document.issuing_body or "").upper()
-    if body in {"ASTM", "GRI", "ISO"}:
-        return body
-    sid = document.standard_id.upper().replace("ASTM", "").strip().lstrip("-_ ")
-    if sid.startswith("GRI") or re.match(r"^G[A-Z]\d", sid):
-        return "GRI"
-    if sid.startswith("ISO"):
-        return "ISO"
-    if re.match(r"^[A-Z]\d", sid):
-        return "ASTM"
-    return body or "UNKNOWN"
+# Canonical issuing body (inferring GRI/ISO/ASTM for legacy docs stored as UNKNOWN).
+# Shared with the admin document library so a newly uploaded standard is classified
+# for body-aware retrieval exactly as the bulk-ingested corpus is.
+_document_body = canonical_issuing_body
 
 
 def _detect_body_targeting(

@@ -54,6 +54,16 @@ function ChevronLeft() {
   );
 }
 
+function LibraryIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H9v16H5.5A1.5 1.5 0 0 1 4 18.5z" />
+      <path d="M9 4h4.5A1.5 1.5 0 0 1 15 5.5v13A1.5 1.5 0 0 1 13.5 20H9z" />
+      <path d="M16.4 5.3l2.6.7a1.5 1.5 0 0 1 1 1.9l-3.4 12" />
+    </svg>
+  );
+}
+
 function SearchIcon() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -110,6 +120,8 @@ export default function ChatSidebar({
   userEmail,
   onSignOut,
   canSignOut,
+  canManageLibrary,
+  onOpenLibrary,
 }) {
   const [activeTab, setActiveTab] = useState("chats");
   const [openProjectId, setOpenProjectId] = useState(null);
@@ -230,6 +242,13 @@ export default function ChatSidebar({
         <SearchIcon />
         Search chats
       </button>
+
+      {canManageLibrary ? (
+        <button type="button" className="sidebar-search-btn" onClick={onOpenLibrary}>
+          <LibraryIcon />
+          Document library
+        </button>
+      ) : null}
 
       <div className="sidebar-tabs" role="tablist">
         <button

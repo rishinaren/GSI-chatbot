@@ -56,6 +56,37 @@ function parseApiError(detail) {
   return detail;
 }
 
+// File uploads must not carry a JSON Content-Type: the browser sets
+// multipart/form-data itself, including the boundary.
+async function upload(path, formData) {
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: authHeaders(path),
+      body: formData,
+    });
+  } catch {
+    // fetch only rejects on a network-level failure, which reaches the user as
+    // an unhelpful "Failed to fetch" unless we say something they can act on.
+    throw new ApiError(
+      "We lost the connection while sending that file. Check your internet and try again.",
+      0,
+    );
+  }
+  if (!response.ok) {
+    const detail = await response.text();
+    if (response.status === 401) {
+      clearStoredSession();
+    }
+    throw new ApiError(
+      parseApiError(detail) || `Request failed with status ${response.status}`,
+      response.status,
+    );
+  }
+  return response.json();
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -225,6 +256,32 @@ export function renameProject(projectId, name) {
 
 export function deleteProject(projectId) {
   return request(`/projects/${projectId}`, { method: "DELETE" });
+}
+
+// ---- Admin document library ----
+
+export function getAdminConfig() {
+  return request("/admin/config");
+}
+
+export function listLibraryDocuments() {
+  return request("/admin/documents");
+}
+
+export function analyzeLibraryDocument(file) {
+  const form = new FormData();
+  form.append("file", file);
+  return upload("/admin/documents/analyze", form);
+}
+
+export function addLibraryDocument({ file, standardId, title, issuingBody, year }) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("standard_id", standardId ?? "");
+  form.append("title", title ?? "");
+  form.append("issuing_body", issuingBody ?? "");
+  form.append("year", year ?? "");
+  return upload("/admin/documents", form);
 }
 
 export function searchVideos(query, topK = 3) {

@@ -26,6 +26,13 @@ from standards_rag.env_bootstrap import (
     load_dotenv_files,
     sync_runtime_assets_from_s3,
 )
+from standards_rag.library import (
+    KNOWN_BODIES,
+    MAX_UPLOAD_BYTES,
+    DocumentLibrary,
+    LibraryError,
+    is_admin_email,
+)
 from standards_rag.membership import (
     MembershipError,
     build_membership_service_from_env,
@@ -44,9 +51,16 @@ logger = logging.getLogger(__name__)
 load_dotenv_files()
 
 try:  # Optional at import time; create_app still validates runtime deps.
+    # These two are referenced in route *annotations*. With `from __future__ import
+    # annotations` those are strings, so FastAPI resolves them against this module's
+    # globals - importing them inside create_app would leave the forward ref undefined.
     from fastapi import Request as FastAPIRequest
+    from fastapi import UploadFile
 except Exception:  # pragma: no cover - only when api deps missing
     class FastAPIRequest:  # type: ignore[no-redef]
+        pass
+
+    class UploadFile:  # type: ignore[no-redef]
         pass
 
 
@@ -60,7 +74,7 @@ def _allowed_origins() -> list[str]:
 
 def create_app(store: InMemoryStandardsStore | None = None) -> Any:
     try:
-        from fastapi import FastAPI, HTTPException
+        from fastapi import FastAPI, File, Form, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.responses import FileResponse
     except ImportError as exc:
@@ -433,6 +447,88 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         if not deleted:
             raise HTTPException(status_code=404, detail="project not found")
         return {"deleted": True}
+
+    # --- Admin document library -------------------------------------------
+    # A GSI administrator adds a standard here and it is answerable on the next
+    # question - no redeploy - because ``library`` holds the same store object
+    # the chat engine queries.
+    library = DocumentLibrary(store)
+
+    def require_admin(request: FastAPIRequest) -> AuthenticatedUser:
+        user = effective_user(request)
+        if not is_admin_email(user.email):
+            raise HTTPException(
+                status_code=403,
+                detail="Your account does not have access to the document library.",
+            )
+        return user
+
+    def read_upload(upload: UploadFile) -> bytes:
+        # Read one byte past the cap so an oversized file is rejected by size
+        # rather than pulled entirely into memory first.
+        data = upload.file.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            limit = MAX_UPLOAD_BYTES // (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"That file is larger than {limit} MB, which is bigger than we can take. "
+                    "If it is a bundle of several standards, please upload them one at a time."
+                ),
+            )
+        return data
+
+    @app.get("/admin/config")
+    def admin_config(request: FastAPIRequest) -> dict[str, object]:
+        """Whether this signed-in user may manage the library (drives the UI entry point)."""
+        user = effective_user(request)
+        return {
+            "is_admin": is_admin_email(user.email),
+            "email": user.email,
+            "publishers": list(KNOWN_BODIES),
+            "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
+        }
+
+    @app.get("/admin/documents")
+    def admin_list_documents(request: FastAPIRequest) -> dict[str, object]:
+        require_admin(request)
+        return {"documents": library.documents(), **library.summary()}
+
+    @app.post("/admin/documents/analyze")
+    def admin_analyze_document(
+        request: FastAPIRequest, file: UploadFile = File(...)
+    ) -> dict[str, object]:
+        """Read an uploaded PDF and guess its details. Changes nothing."""
+        require_admin(request)
+        data = read_upload(file)
+        try:
+            return library.analyze(data, file.filename or "")
+        except LibraryError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.post("/admin/documents")
+    def admin_add_document(
+        request: FastAPIRequest,
+        file: UploadFile = File(...),
+        standard_id: str = Form(""),
+        title: str = Form(""),
+        issuing_body: str = Form(""),
+        year: str = Form(""),
+    ) -> dict[str, object]:
+        user = require_admin(request)
+        data = read_upload(file)
+        try:
+            return library.add(
+                data,
+                file.filename or "",
+                standard_id=standard_id,
+                title=title,
+                issuing_body=issuing_body,
+                year=year,
+                added_by=user.email,
+            )
+        except LibraryError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     @app.post("/videos/search")
     def videos_search(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
