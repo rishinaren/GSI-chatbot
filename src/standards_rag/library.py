@@ -68,25 +68,9 @@ class LibraryError(Exception):
         self.status_code = status_code
 
 
-# ---------------------------------------------------------------------------
-# Who may manage the library
-# ---------------------------------------------------------------------------
-
-
-def admin_emails_from_env() -> set[str]:
-    raw = os.getenv("GSI_ADMIN_EMAILS", "")
-    return {part.strip().lower() for part in raw.split(",") if part.strip()}
-
-
-def is_admin_email(email: str | None) -> bool:
-    """Admins are an explicit allowlist; with none configured, nobody is one.
-
-    Failing closed matters here: this role can change what the assistant tells
-    every user, so an unset env var must not hand the library to all sign-ins.
-    """
-    if not email:
-        return False
-    return email.strip().lower() in admin_emails_from_env()
+# Who may manage the library lives in ``admin_access`` - the root allowlist plus
+# the grants admins make at runtime. Kept out of this module so there is exactly
+# one answer to "is this person an admin".
 
 
 # ---------------------------------------------------------------------------

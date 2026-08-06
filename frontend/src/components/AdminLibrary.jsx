@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { addLibraryDocument, analyzeLibraryDocument, listLibraryDocuments } from "../api";
+import {
+  addLibraryDocument,
+  analyzeLibraryDocument,
+  grantLibraryAccess,
+  listLibraryDocuments,
+  listLibraryPeople,
+  revokeLibraryAccess,
+} from "../api";
 
 // The people using this screen manage standards, not software. Every label here
 // is deliberately in their words: "documents" and "sections", never chunks,
@@ -43,6 +50,15 @@ function CheckIcon() {
   );
 }
 
+function PersonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="8" r="3.6" />
+      <path d="M5 20a7 7 0 0 1 14 0" />
+    </svg>
+  );
+}
+
 function DocIcon() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -73,6 +89,7 @@ export default function AdminLibrary({ onClose }) {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [publisher, setPublisher] = useState("All");
+  const [tab, setTab] = useState("documents");
 
   useEffect(() => {
     void refresh();
@@ -131,25 +148,56 @@ export default function AdminLibrary({ onClose }) {
       >
         {view === "browse" ? (
           <>
-            <header className="library-head with-action">
+            {/* `with-action` drives the narrow-width restack, which is only needed
+                when the Add button shares the row with the title. */}
+            <header className={`library-head ${tab === "documents" ? "with-action" : ""}`}>
               <div className="library-head-text">
                 <h2 className="library-title">Document library</h2>
                 <p className="library-sub">
-                  {loading
-                    ? "Loading…"
-                    : `The ${summary.document_count} standards the assistant can read and quote from.`}
+                  {tab === "people"
+                    ? "The people who can add and replace what the assistant reads."
+                    : loading
+                      ? "Loading…"
+                      : `The ${summary.document_count} standards the assistant can read and quote from.`}
                 </p>
               </div>
               <div className="library-head-actions">
-                <button type="button" className="library-primary" onClick={() => setView("add")}>
-                  <span aria-hidden="true">+</span> Add a document
-                </button>
+                {tab === "documents" ? (
+                  <button type="button" className="library-primary" onClick={() => setView("add")}>
+                    <span aria-hidden="true">+</span> Add a document
+                  </button>
+                ) : null}
                 <button type="button" className="library-close" onClick={onClose} aria-label="Close">
                   <CloseIcon />
                 </button>
               </div>
             </header>
 
+            <div className="library-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "documents"}
+                className={`library-tab ${tab === "documents" ? "active" : ""}`}
+                onClick={() => setTab("documents")}
+              >
+                Documents
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "people"}
+                className={`library-tab ${tab === "people" ? "active" : ""}`}
+                onClick={() => setTab("people")}
+              >
+                Who can manage this
+              </button>
+            </div>
+
+            {tab === "people" ? (
+              <PeoplePanel />
+            ) : (
+              <>
             <div className="library-toolbar">
               <div className="library-search">
                 <SearchIcon />
@@ -210,9 +258,13 @@ export default function AdminLibrary({ onClose }) {
                 </div>
               ))}
             </div>
+              </>
+            )}
 
             <footer className="library-foot">
-              Everything here is searched every time someone asks a question.
+              {tab === "people"
+                ? "Anyone listed here can add documents the assistant will quote."
+                : "Everything here is searched every time someone asks a question."}
             </footer>
           </>
         ) : (
@@ -225,6 +277,136 @@ export default function AdminLibrary({ onClose }) {
             onAdded={refresh}
           />
         )}
+      </div>
+    </div>
+  );
+}
+
+// Granting access is not account creation: the API only accepts an email that
+// already belongs to a subscriber or GSI member, so the copy here sets that
+// expectation before someone types a colleague's address and expects an invite.
+function PeoplePanel() {
+  const [people, setPeople] = useState([]);
+  const [you, setYou] = useState("");
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const data = await listLibraryPeople();
+      setPeople(data.people ?? []);
+      setYou(data.you ?? "");
+      setError("");
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load the list.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    const address = email.trim();
+    if (!address) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const granted = await grantLibraryAccess(address);
+      setNotice(`${granted.email} can now manage the library.`);
+      setEmail("");
+      await refresh();
+    } catch (grantError) {
+      setError(grantError instanceof Error ? grantError.message : "Could not give access.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(address) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await revokeLibraryAccess(address);
+      setNotice(`${address} no longer has access.`);
+      await refresh();
+    } catch (revokeError) {
+      setError(revokeError instanceof Error ? revokeError.message : "Could not remove access.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="library-people">
+      <form className="library-invite" onSubmit={submit}>
+        <label htmlFor="lib-invite">Give someone access</label>
+        <div className="library-invite-row">
+          <input
+            id="lib-invite"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="their.email@example.com"
+            disabled={busy}
+          />
+          <button type="submit" className="library-primary" disabled={busy || !email.trim()}>
+            {busy ? "Checking…" : "Give access"}
+          </button>
+        </div>
+        <span className="library-field-help">
+          They need to have signed in to the chatbot at least once already - this gives an
+          existing account access to the library, it does not create one or send an invitation.
+        </span>
+      </form>
+
+      {error ? <div className="library-error inline">{error}</div> : null}
+      {notice ? <div className="library-notice">{notice}</div> : null}
+
+      <div className="library-people-list">
+        {loading ? <p className="library-empty">Loading…</p> : null}
+        {people.map((person) => (
+          <div key={person.email} className="library-person">
+            <span className="library-row-icon" aria-hidden="true">
+              <PersonIcon />
+            </span>
+            <div className="library-person-main">
+              <span className="library-person-email">
+                {person.email}
+                {person.email === you ? <span className="library-pill added">You</span> : null}
+              </span>
+              {person.source === "root" ? (
+                <p className="library-person-note">
+                  Set in the service configuration - can only be changed by a developer.
+                </p>
+              ) : (
+                <p className="library-person-note">
+                  Added{person.granted_by ? ` by ${person.granted_by}` : ""}
+                  {person.granted_at ? ` on ${formatDate(person.granted_at)}` : ""}
+                </p>
+              )}
+            </div>
+            {person.removable && person.email !== you ? (
+              <button
+                type="button"
+                className="library-remove"
+                onClick={() => remove(person.email)}
+                disabled={busy}
+              >
+                Remove
+              </button>
+            ) : null}
+          </div>
+        ))}
       </div>
     </div>
   );

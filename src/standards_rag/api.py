@@ -26,12 +26,15 @@ from standards_rag.env_bootstrap import (
     load_dotenv_files,
     sync_runtime_assets_from_s3,
 )
+from standards_rag.admin_access import (
+    AdminAccessError,
+    build_admin_registry_from_env,
+)
 from standards_rag.library import (
     KNOWN_BODIES,
     MAX_UPLOAD_BYTES,
     DocumentLibrary,
     LibraryError,
-    is_admin_email,
 )
 from standards_rag.membership import (
     MembershipError,
@@ -453,10 +456,13 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
     # question - no redeploy - because ``library`` holds the same store object
     # the chat engine queries.
     library = DocumentLibrary(store)
+    # Root admins come from GSI_ADMIN_EMAILS; further admins are granted at
+    # runtime from inside the library itself.
+    admins = build_admin_registry_from_env(membership_service.member_directory)
 
     def require_admin(request: FastAPIRequest) -> AuthenticatedUser:
         user = effective_user(request)
-        if not is_admin_email(user.email):
+        if not admins.is_admin(user.email):
             raise HTTPException(
                 status_code=403,
                 detail="Your account does not have access to the document library.",
@@ -483,7 +489,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         """Whether this signed-in user may manage the library (drives the UI entry point)."""
         user = effective_user(request)
         return {
-            "is_admin": is_admin_email(user.email),
+            "is_admin": admins.is_admin(user.email),
             "email": user.email,
             "publishers": list(KNOWN_BODIES),
             "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
@@ -529,6 +535,32 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             )
         except LibraryError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.get("/admin/people")
+    def admin_list_people(request: FastAPIRequest) -> dict[str, object]:
+        user = require_admin(request)
+        return {"people": admins.people(), "you": user.email}
+
+    @app.post("/admin/people")
+    def admin_grant_person(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
+        """Give an existing account access to the library. Does not create accounts."""
+        user = require_admin(request)
+        email = str(payload.get("email", "")).strip()
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        try:
+            return admins.grant(email, granted_by=user.email)
+        except AdminAccessError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.delete("/admin/people/{email}")
+    def admin_revoke_person(email: str, request: FastAPIRequest) -> dict[str, bool]:
+        user = require_admin(request)
+        try:
+            admins.revoke(unquote(email), revoked_by=user.email)
+        except AdminAccessError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        return {"removed": True}
 
     @app.post("/videos/search")
     def videos_search(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:

@@ -170,6 +170,15 @@ class MemberDirectory(Protocol):
     def verify(self, email: str, password: str) -> MemberRecord | None:  # pragma: no cover - protocol
         ...
 
+    def exists(self, email: str) -> bool:  # pragma: no cover - protocol
+        """Whether this address is a known member, without needing their password.
+
+        Used when an admin grants library access by email - see ``admin_access``.
+        Implementations that cannot answer should raise rather than return False,
+        so "we could not check" is never mistaken for "no such member".
+        """
+        ...
+
 
 class PlaceholderMemberDirectory:
     """In-memory stand-in for the real GSI member database.
@@ -195,6 +204,9 @@ class PlaceholderMemberDirectory:
             "name": name,
             "organization_id": organization_id,
         }
+
+    def exists(self, email: str) -> bool:
+        return email.strip().lower() in self._members
 
     def verify(self, email: str, password: str) -> MemberRecord | None:
         record = self._members.get(email.strip().lower())

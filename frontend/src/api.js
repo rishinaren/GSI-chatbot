@@ -284,6 +284,21 @@ export function addLibraryDocument({ file, standardId, title, issuingBody, year 
   return upload("/admin/documents", form);
 }
 
+export function listLibraryPeople() {
+  return request("/admin/people");
+}
+
+export function grantLibraryAccess(email) {
+  return request("/admin/people", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function revokeLibraryAccess(email) {
+  return request(`/admin/people/${encodeURIComponent(email)}`, { method: "DELETE" });
+}
+
 export function searchVideos(query, topK = 3) {
   return request("/videos/search", {
     method: "POST",
