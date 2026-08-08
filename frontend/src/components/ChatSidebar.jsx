@@ -246,7 +246,7 @@ export default function ChatSidebar({
       {canManageLibrary ? (
         <button type="button" className="sidebar-search-btn" onClick={onOpenLibrary}>
           <LibraryIcon />
-          Document library
+          Admin portal
         </button>
       ) : null}
 

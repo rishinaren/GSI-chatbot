@@ -30,6 +30,7 @@ from standards_rag.admin_access import (
     AdminAccessError,
     build_admin_registry_from_env,
 )
+from standards_rag.admin_overview import build_overview, video_rows
 from standards_rag.library import (
     KNOWN_BODIES,
     MAX_UPLOAD_BYTES,
@@ -493,6 +494,28 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             "email": user.email,
             "publishers": list(KNOWN_BODIES),
             "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
+        }
+
+    @app.get("/admin/overview")
+    def admin_overview(request: FastAPIRequest) -> dict[str, object]:
+        """The admin landing page: how big the knowledge base is, and its health."""
+        require_admin(request)
+        return build_overview(
+            library,
+            store,
+            video_store,
+            answer_writing_active=answer_rewriter is not None,
+        )
+
+    @app.get("/admin/videos")
+    def admin_list_videos(request: FastAPIRequest) -> dict[str, object]:
+        """Every walkthrough video and the library documents it is linked to."""
+        require_admin(request)
+        rows = video_rows(store, video_store)
+        return {
+            "videos": rows,
+            "video_count": len(rows),
+            "linked_count": sum(1 for row in rows if row["linked"]),
         }
 
     @app.get("/admin/documents")

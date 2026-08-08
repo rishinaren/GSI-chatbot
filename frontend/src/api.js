@@ -258,10 +258,18 @@ export function deleteProject(projectId) {
   return request(`/projects/${projectId}`, { method: "DELETE" });
 }
 
-// ---- Admin document library ----
+// ---- Admin portal ----
 
 export function getAdminConfig() {
   return request("/admin/config");
+}
+
+export function getAdminOverview() {
+  return request("/admin/overview");
+}
+
+export function listAdminVideos() {
+  return request("/admin/videos");
 }
 
 export function listLibraryDocuments() {

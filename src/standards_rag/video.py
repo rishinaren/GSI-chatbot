@@ -119,17 +119,59 @@ def video_suggestion_reason(video: "VideoTranscript") -> str:
     return f"We may have a related video that partially covers {topic}."
 
 
-def _designation_key(value: str) -> str:
+def designation_key(value: str) -> str:
     """Comparable core of a designation: lowercased alnum with the issuing body stripped."""
     compact = re.sub(r"[^a-z0-9]", "", (value or "").lower())
     return re.sub(r"^(gri|astm|iso)", "", compact)
 
 
+# A designation is <body?> <family?> <number> <variant?> <revision?>:
+#   D4595-24 · D6574-13(2021) · GRI-GM13r · GCL3 · ISO 10319
+# Everything after the one-letter variant is a revision year and is dropped.
+_DESIGNATION_RE = re.compile(
+    r"^(ASTM|GRI|ISO|BS)?[\s\-_]*([A-Z]{1,4})?[\s\-_]*(\d+)\s*([A-Z]?)", re.IGNORECASE
+)
+
+
+def parse_designation(value: str) -> tuple[str, str, str] | None:
+    """Split a designation into (family, number, variant); None if it is not one.
+
+    ``GRI-GM13r`` -> ``("GM", "13", "R")``, ``D4595-24`` -> ``("D", "4595", "")``,
+    ``ISO 10319`` -> ``("ISO", "10319", "")``.
+    """
+    match = _DESIGNATION_RE.match((value or "").strip())
+    if not match:
+        return None
+    body, family, number, variant = match.groups()
+    resolved = (family or body or "").upper()
+    return (resolved, number, (variant or "").upper()) if resolved else None
+
+
+def designations_match(left: str, right: str) -> bool:
+    """True when two designations name the same standard, ignoring body and year.
+
+    Stricter than :func:`standards_overlap`, which prefix-matches the flattened
+    key so that ``D4595`` reaches ``D4595-24``. That rule also makes ``GT12``
+    reach ``GT1``, which is a different standard - tolerable when it only widens
+    a relevance gate, wrong when the answer is shown to an administrator as
+    "this video covers that document". Comparing the parsed parts keeps the
+    revision-agnostic behaviour without the false link.
+    """
+    a, b = parse_designation(left), parse_designation(right)
+    if a is None or b is None:
+        return False
+    if a[0] != b[0] or a[1] != b[1]:
+        return False
+    # A bare designation covers its lettered variants (GT12 covers GT12a and
+    # GT12b); two *different* letters are two different standards.
+    return not (a[2] and b[2]) or a[2] == b[2]
+
+
 def standards_overlap(video_standards: tuple[str, ...], cited: set[str]) -> bool:
     """True if any video designation prefix-matches any cited standard id (year-agnostic)."""
-    cited_keys = [_designation_key(c) for c in cited]
+    cited_keys = [designation_key(c) for c in cited]
     for standard in video_standards:
-        key = _designation_key(standard)
+        key = designation_key(standard)
         if len(key) < 3:
             continue
         for cited_key in cited_keys:

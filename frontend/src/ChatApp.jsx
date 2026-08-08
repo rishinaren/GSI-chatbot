@@ -6,7 +6,7 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import ChatSidebar from "./components/ChatSidebar";
 import AuthExperience from "./components/AuthExperience";
-import AdminLibrary from "./components/AdminLibrary";
+import AdminPortal from "./components/AdminPortal";
 import {
   ApiError,
   assignConversationToProject,
@@ -90,7 +90,7 @@ function ChatApp() {
   const [error, setError] = useState("");
   const [followUpSuggestions, setFollowUpSuggestions] = useState([]);
   const [canManageLibrary, setCanManageLibrary] = useState(false);
-  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   const canSubmit = useMemo(() => question.trim().length > 0 && !isLoading, [question, isLoading]);
   const hasStarted = messages.length > 0;
@@ -307,6 +307,22 @@ function ChatApp() {
     return <div className="app-loading">Loading…</div>;
   }
 
+  // The admin portal takes over the whole window rather than floating above the
+  // chat: it is a different job, and Chats/Projects belong to the person asking
+  // questions, not the person curating what gets answered.
+  if (adminOpen && authed && canManageLibrary) {
+    return (
+      <AdminPortal
+        email={getUserEmail()}
+        onExit={() => setAdminOpen(false)}
+        onSignOut={() => {
+          signOut();
+          window.location.reload();
+        }}
+      />
+    );
+  }
+
   const composerProps = { question, setQuestion, canSubmit, onSubmit, onKeyDown };
   // Units selector hidden: in prod the OpenAI rewriter strips the appended unit-conversion
   // note (it forbids numbers not in the source), so the control had no visible effect.
@@ -329,7 +345,7 @@ function ChatApp() {
         userEmail={authed ? getUserEmail() : ""}
         canSignOut={authed}
         canManageLibrary={authed && canManageLibrary}
-        onOpenLibrary={() => setLibraryOpen(true)}
+        onOpenLibrary={() => setAdminOpen(true)}
         onSignOut={() => {
           signOut();
           window.location.reload();
@@ -371,10 +387,6 @@ function ChatApp() {
           <EmptyState error={error} composerProps={composerProps} />
         )}
       </div>
-
-      {libraryOpen && canManageLibrary ? (
-        <AdminLibrary onClose={() => setLibraryOpen(false)} />
-      ) : null}
 
       {showAuthModal ? <AuthExperience onSignedIn={handleSignedIn} connectionError={error} /> : null}
     </div>

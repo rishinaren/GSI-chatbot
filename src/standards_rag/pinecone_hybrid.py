@@ -148,6 +148,28 @@ class PineconeHybridStore(InMemoryStandardsStore):
         for _, chunk_list in flattened:
             self.upsert_embeddings(chunk_list)
 
+    def index_stats(self) -> dict[str, int]:
+        """Live vector counts, for the admin status panel. Raises if unreachable."""
+        raw = self._index.describe_index_stats()
+        data = raw.to_dict() if hasattr(raw, "to_dict") else dict(raw)
+        namespaces = data.get("namespaces") or {}
+
+        def count(*names: str) -> int:
+            for name in names:
+                entry = namespaces.get(name)
+                if entry:
+                    return int(entry.get("vector_count") or 0)
+            return 0
+
+        # An unnamed namespace is reported as "__default__" by current clients
+        # and as "" by older ones, so accept either.
+        default_keys = ("__default__", "") if self.config.namespace is None else (self.config.namespace,)
+        return {
+            "total": int(data.get("total_vector_count") or 0),
+            "standards": count(*default_keys),
+            "videos": count(VIDEO_NAMESPACE),
+        }
+
     def delete_chunks(self, chunk_ids: Iterable[str]) -> None:
         """Delete chunk vectors from the standards namespace (Pinecone caps ids at 1000)."""
         ids = [str(chunk_id) for chunk_id in chunk_ids]
