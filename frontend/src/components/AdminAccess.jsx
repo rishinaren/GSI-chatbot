@@ -89,8 +89,7 @@ export default function AdminAccess({ head }) {
             </button>
           </div>
           <span className="library-field-help">
-            They need to have signed in to the chatbot at least once already - this gives an
-            existing account access to the library, it does not create one or send an invitation.
+            Note: They need to have signed in to the chatbot at least once already.
           </span>
         </form>
 
@@ -114,11 +113,7 @@ export default function AdminAccess({ head }) {
                   {person.email}
                   {person.email === you ? <span className="library-pill added">You</span> : null}
                 </span>
-                {person.source === "root" ? (
-                  <p className="library-person-note">
-                    Set in the service configuration - can only be changed by a developer.
-                  </p>
-                ) : (
+                {person.source === "root" ? null : (
                   <p className="library-person-note">
                     Added{person.granted_by ? ` by ${person.granted_by}` : ""}
                     {person.granted_at ? ` on ${formatDate(person.granted_at)}` : ""}

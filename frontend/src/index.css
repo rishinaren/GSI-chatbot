@@ -2025,6 +2025,29 @@ input {
   gap: 16px;
 }
 
+/* Only rendered when the reader arrived from a shortcut, so it sits above the
+   title as a return path rather than as permanent furniture. */
+.admin-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px -8px;
+  padding: 5px 10px 5px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.admin-back:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
 .admin-page-title {
   margin: 0;
   font-size: 1.35rem;
@@ -2175,98 +2198,6 @@ input {
   font-size: 0.85rem;
   color: var(--muted);
   line-height: 1.6;
-}
-
-/* ---- Dashboard: status ---- */
-.admin-status {
-  display: grid;
-  gap: 2px;
-  margin: 0 -12px;
-}
-
-.admin-status-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  padding: 11px 12px;
-  border-radius: 10px;
-  transition: background 0.14s ease;
-}
-
-.admin-status-row:hover {
-  background: var(--surface-hover);
-}
-
-.admin-status-dot {
-  width: 8px;
-  height: 8px;
-  margin-top: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.admin-status-dot.ok {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.admin-status-dot.warn {
-  background: var(--warn);
-  box-shadow: 0 0 0 3px var(--warn-soft);
-}
-
-.admin-status-dot.off {
-  background: var(--faint);
-  box-shadow: 0 0 0 3px rgba(108, 108, 116, 0.16);
-}
-
-.admin-status-main {
-  flex: 1;
-  min-width: 0;
-}
-
-.admin-status-top {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  flex-wrap: wrap;
-}
-
-.admin-status-label {
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-
-/* The state is spelled out, never colour alone. */
-.admin-status-state {
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.admin-status-state.ok {
-  color: var(--accent-hover);
-  background: var(--accent-soft);
-}
-
-.admin-status-state.warn {
-  color: var(--warn-text);
-  background: var(--warn-soft);
-}
-
-.admin-status-state.off {
-  color: var(--faint);
-  background: var(--bg);
-}
-
-.admin-status-detail {
-  margin: 4px 0 0;
-  font-size: 0.8rem;
-  color: var(--muted);
-  line-height: 1.55;
 }
 
 /* ---- Videos ---- */

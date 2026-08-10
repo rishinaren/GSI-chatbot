@@ -11,7 +11,7 @@ import { CheckIcon, DocIcon, SearchIcon, UploadIcon, formatDate, formatSize } fr
 const PUBLISHERS = ["ASTM", "GRI", "ISO", "Other"];
 const MAX_MB = 40;
 
-export default function AdminDocuments({ head, view, onViewChange }) {
+export default function AdminDocuments({ head, view, onViewChange, onBack }) {
   const [documents, setDocuments] = useState([]);
   const [summary, setSummary] = useState({ document_count: 0, section_count: 0 });
   const [loading, setLoading] = useState(true);
@@ -75,6 +75,7 @@ export default function AdminDocuments({ head, view, onViewChange }) {
     <>
       <PageHead
         head={head}
+        onBack={onBack}
         sub={
           loading
             ? "Loading…"

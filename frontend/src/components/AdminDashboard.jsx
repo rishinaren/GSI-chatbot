@@ -2,10 +2,9 @@ import { getAdminOverview } from "../api";
 import { Card, PageHead, useAdminData } from "./AdminLayout";
 import { DocIcon } from "./AdminIcons";
 
-// The landing page answers two questions and nothing else: how much does the
-// assistant know, and is anything broken. Every number here is a count of
-// something a person can go and look at in another section, so each block links
-// to the section that explains it.
+// The landing page answers one question: how much does the assistant know.
+// Every number here is a count of something a person can go and look at in
+// another section, so each block links to the section that explains it.
 
 // Matches the wording used for chat recency in the sidebar.
 function relativeDays(iso) {
@@ -19,8 +18,6 @@ function relativeDays(iso) {
   if (days < 30) return `${days} days ago`;
   return then.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
-
-const STATE_WORD = { ok: "Working", warn: "Check this", off: "Off" };
 
 function Stat({ value, label, note }) {
   return (
@@ -70,7 +67,7 @@ export default function AdminDashboard({ head, onNavigate }) {
           <button
             type="button"
             className="library-primary"
-            onClick={() => onNavigate("documents", "add")}
+            onClick={() => onNavigate("documents", "add", "dashboard")}
           >
             <span aria-hidden="true">+</span> Add a document
           </button>
@@ -108,7 +105,7 @@ export default function AdminDashboard({ head, onNavigate }) {
         title="Where they come from"
         note="Every document in the library, by the body that publishes it."
         action={
-          <button type="button" className="library-link" onClick={() => onNavigate("documents")}>
+          <button type="button" className="library-link" onClick={() => onNavigate("documents", "browse", "dashboard")}>
             See all documents
           </button>
         }
@@ -137,17 +134,14 @@ export default function AdminDashboard({ head, onNavigate }) {
         note="Documents uploaded through this portal, newest first."
         action={
           uploads.length ? (
-            <button type="button" className="library-link" onClick={() => onNavigate("documents")}>
+            <button type="button" className="library-link" onClick={() => onNavigate("documents", "browse", "dashboard")}>
               See all documents
             </button>
           ) : null
         }
       >
         {uploads.length === 0 ? (
-          <p className="admin-empty">
-            Nothing has been uploaded here yet. The {count(totals.documents)} standards in the
-            library were loaded when the assistant was set up - add one and it will appear here.
-          </p>
+          <p className="admin-empty">Nothing has been uploaded here yet.</p>
         ) : (
           <div className="admin-recent">
             {uploads.map((row) => (
@@ -172,27 +166,6 @@ export default function AdminDashboard({ head, onNavigate }) {
             ))}
           </div>
         )}
-      </Card>
-
-      <Card title="System status" note="What is running behind the assistant right now.">
-        <div className="admin-status">
-          {(data.status ?? []).map((row) => (
-            <div key={row.key} className="admin-status-row">
-              {/* The dot is never the only signal - the state is also spelled out
-                  next to the label, so it reads without relying on colour. */}
-              <span className={`admin-status-dot ${row.state}`} aria-hidden="true" />
-              <div className="admin-status-main">
-                <div className="admin-status-top">
-                  <span className="admin-status-label">{row.label}</span>
-                  <span className={`admin-status-state ${row.state}`}>
-                    {STATE_WORD[row.state] ?? row.state}
-                  </span>
-                </div>
-                <p className="admin-status-detail">{row.detail}</p>
-              </div>
-            </div>
-          ))}
-        </div>
       </Card>
     </>
   );

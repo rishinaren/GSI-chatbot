@@ -1,14 +1,26 @@
 import { useEffect, useState } from "react";
+import { BackIcon } from "./AdminIcons";
 
 // The pieces every admin panel is built from. They live here rather than in
 // AdminPortal so the panels do not have to import the shell that renders them,
 // which would be a cycle.
 
-/** Page header: title, one explanatory line, and an optional action. */
-export function PageHead({ head, sub, action }) {
+/** Page header: title, one explanatory line, and an optional action.
+ *
+ * `onBack` is only passed when the reader arrived from somewhere they can be
+ * returned to (a dashboard shortcut), so a section opened straight from the nav
+ * does not grow a Back button pointing nowhere.
+ */
+export function PageHead({ head, sub, action, onBack }) {
   return (
     <header className="admin-page-head">
       <div>
+        {onBack ? (
+          <button type="button" className="admin-back" onClick={onBack}>
+            <BackIcon />
+            Back
+          </button>
+        ) : null}
         <h1 className="admin-page-title">{head.title}</h1>
         <p className="admin-page-sub">{sub ?? head.subtitle}</p>
       </div>

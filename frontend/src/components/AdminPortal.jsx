@@ -16,7 +16,7 @@ const SECTIONS = [
     label: "Dashboard",
     icon: DashboardIcon,
     title: "Dashboard",
-    subtitle: "What the assistant knows, and whether anything needs looking at.",
+    subtitle: "What the assistant knows.",
   },
   {
     key: "documents",
@@ -46,9 +46,14 @@ export default function AdminPortal({ email, onExit, onSignOut }) {
   // Set by the dashboard's shortcuts so "Add a document" lands on the upload
   // step instead of the list the person would then have to click through.
   const [documentsView, setDocumentsView] = useState("browse");
+  // Where a Back button should return to, set only when a shortcut took the
+  // reader somewhere. Picking the nav directly clears it, because then there is
+  // no "before" to go back to.
+  const [returnTo, setReturnTo] = useState(null);
 
-  function go(key, view = "browse") {
+  function go(key, view = "browse", from = null) {
     setDocumentsView(view);
+    setReturnTo(from);
     setSection(key);
   }
 
@@ -110,6 +115,7 @@ export default function AdminPortal({ email, onExit, onSignOut }) {
               head={active}
               view={documentsView}
               onViewChange={setDocumentsView}
+              onBack={returnTo ? () => go(returnTo) : null}
             />
           ) : section === "videos" ? (
             <AdminVideos head={active} />

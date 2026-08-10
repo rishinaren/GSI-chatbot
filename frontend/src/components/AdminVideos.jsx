@@ -152,12 +152,6 @@ export default function AdminVideos({ head }) {
           </div>
         ))}
       </div>
-
-      <p className="admin-foot-note">
-        A video is offered alongside an answer when it covers a standard that answer cites. Videos
-        are pulled from the GSI YouTube playlist - adding one there and re-running the pull makes it
-        available here.
-      </p>
     </>
   );
 }
