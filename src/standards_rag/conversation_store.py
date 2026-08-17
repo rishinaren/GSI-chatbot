@@ -21,6 +21,10 @@ class StoredMessage:
     text: str
     citations: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = field(default_factory=_utc_now_iso)
+    # File names only, for questions that carried an attachment. The document text
+    # is never stored - this exists so a reopened chat still shows what was asked
+    # about, not so the file can be read again.
+    attachments: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -32,6 +36,7 @@ class StoredMessage:
             text=str(data["text"]),
             citations=list(data.get("citations", [])),
             created_at=str(data.get("created_at") or _utc_now_iso()),
+            attachments=list(data.get("attachments", [])),
         )
 
 
@@ -159,6 +164,7 @@ class ConversationStore(ABC):
         citations: list[dict[str, Any]],
         unit_preference: str | None = None,
         title_generator: Callable[[str, str], str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> ConversationRecord:
         raise NotImplementedError
 
@@ -236,6 +242,7 @@ class InMemoryConversationStore(ConversationStore):
         citations: list[dict[str, Any]],
         unit_preference: str | None = None,
         title_generator: Callable[[str, str], str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> ConversationRecord:
         record = self.get_conversation(user_id, conversation_id)
         if record is None:
@@ -247,7 +254,9 @@ class InMemoryConversationStore(ConversationStore):
             self._records[(user_id, conversation_id)] = record
 
         is_first_turn = not record.messages
-        record.messages.append(StoredMessage(role="user", text=question))
+        record.messages.append(
+            StoredMessage(role="user", text=question, attachments=list(attachments or []))
+        )
         record.messages.append(StoredMessage(role="assistant", text=answer, citations=citations))
         record.updated_at = _utc_now_iso()
         if unit_preference:
@@ -372,6 +381,7 @@ class DynamoDBConversationStore(ConversationStore):
         citations: list[dict[str, Any]],
         unit_preference: str | None = None,
         title_generator: Callable[[str, str], str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> ConversationRecord:
         record = self.get_conversation(user_id, conversation_id)
         if record is None:
@@ -381,7 +391,9 @@ class DynamoDBConversationStore(ConversationStore):
                 title="New chat",
             )
         is_first_turn = not record.messages
-        record.messages.append(StoredMessage(role="user", text=question))
+        record.messages.append(
+            StoredMessage(role="user", text=question, attachments=list(attachments or []))
+        )
         record.messages.append(StoredMessage(role="assistant", text=answer, citations=citations))
         record.updated_at = _utc_now_iso()
         if unit_preference:

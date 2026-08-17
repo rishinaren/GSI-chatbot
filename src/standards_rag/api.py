@@ -31,6 +31,13 @@ from standards_rag.admin_access import (
     build_admin_registry_from_env,
 )
 from standards_rag.admin_overview import build_overview, video_rows
+from standards_rag.attachments import (
+    MAX_ATTACHMENT_BYTES,
+    AttachmentError,
+    AttachmentStore,
+    read_attachment,
+)
+from standards_rag.feedback import FeedbackError, build_feedback_log_from_env
 from standards_rag.library import (
     KNOWN_BODIES,
     MAX_UPLOAD_BYTES,
@@ -143,6 +150,10 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
     register_membership_validator(_membership_validator)
 
     conversation_store = build_conversation_store_from_env()
+    # A question's attachments live in this process only - never embedded, never
+    # written to the corpus. See ``attachments`` for why.
+    attachment_store = AttachmentStore()
+    feedback_log = build_feedback_log_from_env(conversation_store)
     engine = StandardsRagEngine(
         store,
         answer_rewriter=answer_rewriter,
@@ -599,20 +610,93 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         matches = video_store.search(query, top_k=top_k, min_score=0.05)
         return {"videos": [match.to_dict() for match in matches]}
 
+    @app.post("/chat/attachments")
+    def chat_add_attachment(
+        request: FastAPIRequest, file: UploadFile = File(...)
+    ) -> dict[str, object]:
+        """Read a PDF the asker brought, ready to be quoted alongside the library.
+
+        Nothing here is ingested: no embedding, no Pinecone write, no S3 copy. The
+        extracted text stays in this process, owned by this user, until it expires.
+        """
+        user = effective_user(request)
+        data = file.file.read(MAX_ATTACHMENT_BYTES + 1)
+        if len(data) > MAX_ATTACHMENT_BYTES:
+            limit = MAX_ATTACHMENT_BYTES // (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"That file is larger than {limit} MB. Please attach a smaller PDF, "
+                    "or the section of it you want to ask about."
+                ),
+            )
+        try:
+            attachment = read_attachment(data, file.filename or "", owner_id=user.user_id)
+        except AttachmentError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        return attachment_store.add(attachment).to_dict()
+
     @app.post("/chat")
     def chat(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
         question = str(payload.get("question", "")).strip()
-        if not question:
+        user = effective_user(request)
+
+        raw_ids = payload.get("attachment_ids")
+        attachments = []
+        for attachment_id in raw_ids if isinstance(raw_ids, list) else []:
+            attachment = attachment_store.get(str(attachment_id), owner_id=user.user_id)
+            if attachment is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "That attachment is no longer available. Please attach the file "
+                        "again and resend your question."
+                    ),
+                )
+            attachments.append(attachment)
+
+        if not question and not attachments:
             raise HTTPException(status_code=400, detail="question is required")
 
-        user = effective_user(request)
         response = engine.ask(
             question,
             conversation_id=str(payload.get("conversation_id", "default")),
             unit_preference=payload.get("unit_preference"),
             user_id=user.user_id,
+            attachments=attachments,
         )
         return response.to_dict()
+
+    @app.post("/feedback")
+    def submit_feedback(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
+        """Rate an answer, optionally saying what was wrong with it."""
+        user = effective_user(request)
+        try:
+            record = feedback_log.record(
+                user_id=user.user_id,
+                user_email=user.email or "",
+                conversation_id=str(payload.get("conversation_id", "")).strip(),
+                rating=str(payload.get("rating", "")).strip(),
+                comment=str(payload.get("comment", "")),
+                answer=str(payload.get("answer", "")),
+                # Passed back when a comment follows the thumbs-down that opened
+                # the box, so the two land on one row rather than two.
+                feedback_id=str(payload.get("feedback_id", "")),
+                created_at=str(payload.get("created_at", "")),
+            )
+        except FeedbackError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        return {
+            "recorded": True,
+            "feedback_id": record.feedback_id,
+            "created_at": record.created_at,
+        }
+
+    @app.get("/admin/feedback")
+    def admin_feedback(request: FastAPIRequest) -> dict[str, object]:
+        """Every rated answer, grouped by the conversation it came from."""
+        require_admin(request)
+        return {"conversations": feedback_log.conversations(), **feedback_log.summary()}
 
     @app.get("/documents/{document_id}/pdf")
     def document_pdf(document_id: str, request: FastAPIRequest) -> FileResponse:

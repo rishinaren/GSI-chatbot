@@ -6,10 +6,17 @@ import os
 import re
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from standards_rag.attachments import (
+    Attachment,
+    attachment_citations,
+    passage_text,
+    retrieval_hint,
+    select_passages,
+)
 from standards_rag.citation_validation import validate_answer_citations
 from standards_rag.conversation_store import ConversationStore
 from standards_rag.library import canonical_issuing_body
@@ -116,8 +123,10 @@ class StandardsRagEngine:
         conversation_id: str = "default",
         unit_preference: str | None = None,
         user_id: str | None = None,
+        attachments: list[Attachment] | None = None,
     ) -> ChatResponse:
         clean_question = question.strip()
+        attached = list(attachments or [])
         if user_id and self.conversation_store:
             self._hydrate_history_from_store(user_id, conversation_id)
         if not clean_question:
@@ -147,7 +156,10 @@ class StandardsRagEngine:
                 ),
             )
 
-        if self._should_clarify(clean_question):
+        # An attached document is itself the subject, so the two guards that exist to
+        # stop us answering an unanchored question do not apply: "summarise this" and
+        # "does this comply?" are perfectly clear once a file is on the message.
+        if not attached and self._should_clarify(clean_question):
             return self._remember(
                 conversation_id,
                 clean_question,
@@ -165,7 +177,7 @@ class StandardsRagEngine:
                 ),
             )
 
-        if self._is_out_of_scope_query(clean_question):
+        if not attached and self._is_out_of_scope_query(clean_question):
             return self._remember(
                 conversation_id,
                 clean_question,
@@ -187,6 +199,11 @@ class StandardsRagEngine:
             )
 
         query, scoped_document_ids = self._contextual_query(clean_question, conversation_id)
+        # Search the library for what the attached document is about, not only for
+        # what the question spells out - a spec that names GM13 should pull GM13.
+        attachment_hint = retrieval_hint(attached, clean_question)
+        if attachment_hint:
+            query = f"{query}\n{attachment_hint}"
         route = _parse_method_family_route(clean_question)
         routed_document_ids = _document_ids_for_route(route, self.store.documents)
         search_document_ids = _merge_document_filters(scoped_document_ids, routed_document_ids)
@@ -208,7 +225,7 @@ class StandardsRagEngine:
                     results,
                 )
 
-        if not results:
+        if not results and not attached:
             n_chunks = len(self.store.chunks)
             hint = (
                 f"(The loaded index has {n_chunks} text chunks, but nothing matched this query strongly enough.) "
@@ -238,7 +255,7 @@ class StandardsRagEngine:
                 unit_preference=unit_preference,
             )
 
-        if self._needs_partial_clarification(clean_question, results):
+        if not attached and self._needs_partial_clarification(clean_question, results):
             return self._remember(
                 conversation_id,
                 clean_question,
@@ -247,7 +264,11 @@ class StandardsRagEngine:
                 unit_preference=unit_preference,
             )
 
-        if _is_applicability_question(clean_question):
+        if not results:
+            # Attachment-only: the library turned up nothing, but the person's own
+            # document is right here, so answer from that rather than refusing.
+            response = ChatResponse(answer="", citations=[])
+        elif _is_applicability_question(clean_question):
             response = self._answer_applicability(
                 clean_question,
                 results,
@@ -263,7 +284,8 @@ class StandardsRagEngine:
         else:
             response = self._answer_direct(clean_question, results, unit_preference)
 
-        response = self._maybe_rewrite_answer(clean_question, response)
+        response = self._add_attachment_evidence(clean_question, response, attached)
+        response = self._maybe_rewrite_answer(clean_question, response, attached)
         response = self._verify_citations_in_answer(response)
         response = self._attach_videos(clean_question, response)
         return self._remember(
@@ -272,6 +294,7 @@ class StandardsRagEngine:
             response,
             user_id=user_id,
             unit_preference=unit_preference,
+            attachments=attached,
         )
 
     def _search_with_relaxation(
@@ -343,6 +366,55 @@ class StandardsRagEngine:
                         break
         return merged
 
+    def _add_attachment_evidence(
+        self,
+        question: str,
+        response: ChatResponse,
+        attachments: list[Attachment],
+    ) -> ChatResponse:
+        """Append the relevant parts of the person's own document to the draft.
+
+        Appended, never prepended: the library excerpts already carry markers
+        ``[1]…[n]`` and the attachment's continue from there, so no renumbering is
+        needed and the standards keep the leading position in the evidence.
+
+        Selection is lexical and bounded, so this adds one bounded block of prompt
+        text to the answer call that was already going to run - no second model call
+        and no embedding.
+        """
+        if not attachments:
+            return response
+
+        blocks: list[str] = []
+        citations = list(response.citations)
+        for attachment in attachments:
+            passages = select_passages(attachment, question)
+            if not passages:
+                continue
+            lines = []
+            for offset, chunk in enumerate(passages):
+                marker = len(citations) + offset + 1
+                where = f", page {chunk.page_start}" if chunk.page_start else ""
+                lines.append(f"- ({attachment.file_name}{where}) {passage_text(chunk)} [{marker}]")
+            citations.extend(attachment_citations(attachment, passages))
+            blocks.append(
+                f"From the document the user attached ({attachment.file_name}):\n"
+                + "\n".join(lines)
+            )
+
+        if not blocks:
+            return response
+
+        evidence = "\n\n".join(blocks)
+        if response.answer.strip():
+            answer = f"{response.answer.rstrip()}\n\n{evidence}"
+        else:
+            answer = (
+                "Nothing in the standards library matched this question, so the answer below "
+                "rests only on the attached document.\n\n" + evidence
+            )
+        return replace(response, answer=answer, citations=citations, unsupported=False)
+
     def _verify_citations_in_answer(self, response: ChatResponse) -> ChatResponse:
         if response.unsupported or response.needs_clarification or not response.citations:
             return response
@@ -352,15 +424,14 @@ class StandardsRagEngine:
         answer, citations = validate_answer_citations(
             response.answer, response.citations, self.store.chunks
         )
-        return ChatResponse(
-            answer=answer,
-            citations=citations,
-            unsupported=response.unsupported,
-            needs_clarification=response.needs_clarification,
-            follow_up_suggestions=response.follow_up_suggestions,
-        )
+        return replace(response, answer=answer, citations=citations)
 
-    def _maybe_rewrite_answer(self, question: str, response: ChatResponse) -> ChatResponse:
+    def _maybe_rewrite_answer(
+        self,
+        question: str,
+        response: ChatResponse,
+        attachments: list[Attachment] | None = None,
+    ) -> ChatResponse:
         if not self.answer_rewriter:
             return response
         if response.unsupported or response.needs_clarification or not response.citations:
@@ -369,7 +440,12 @@ class StandardsRagEngine:
             return response
 
         try:
-            rewritten = self.answer_rewriter(response.answer, question, response.citations)
+            rewritten = self.answer_rewriter(
+                response.answer,
+                question,
+                response.citations,
+                attachments=[attachment.file_name for attachment in attachments or []],
+            )
         except Exception:
             return response
 
@@ -377,13 +453,7 @@ class StandardsRagEngine:
             return response
 
         cleaned = _strip_trailing_sources_footer(rewritten.strip())
-        return ChatResponse(
-            answer=cleaned,
-            citations=response.citations,
-            unsupported=response.unsupported,
-            needs_clarification=response.needs_clarification,
-            follow_up_suggestions=response.follow_up_suggestions,
-        )
+        return replace(response, answer=cleaned)
 
     def _plan_applicability_retrieval(
         self,
@@ -1022,6 +1092,7 @@ class StandardsRagEngine:
         *,
         user_id: str | None = None,
         unit_preference: str | None = None,
+        attachments: list[Attachment] | None = None,
     ) -> ChatResponse:
         self._history.setdefault(conversation_id, []).append(
             _ConversationTurn(question=question, answer=response.answer, citations=response.citations)
@@ -1035,6 +1106,9 @@ class StandardsRagEngine:
                 citations=[citation.to_dict() for citation in response.citations],
                 unit_preference=unit_preference,
                 title_generator=self.title_generator,
+                # Name only - the document text is never persisted. Reopening the
+                # chat shows what was attached without keeping a copy of it.
+                attachments=[attachment.to_dict() for attachment in attachments or []],
             )
         return response
 

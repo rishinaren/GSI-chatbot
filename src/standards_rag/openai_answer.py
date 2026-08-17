@@ -61,7 +61,7 @@ def build_title_generator_from_env() -> "Callable[[str, str], str] | None":
     return generate_title
 
 
-def build_openai_answer_rewriter_from_env() -> Callable[[str, str, list[Citation]], str] | None:
+def build_openai_answer_rewriter_from_env() -> "Callable[..., str] | None":
     if not openai_rewriter_enabled():
         return None
 
@@ -77,7 +77,13 @@ def build_openai_answer_rewriter_from_env() -> Callable[[str, str, list[Citation
     model = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini").strip()
     client = OpenAI(api_key=api_key)
 
-    def rewrite(draft_answer: str, question: str, citations: list[Citation]) -> str:
+    def rewrite(
+        draft_answer: str,
+        question: str,
+        citations: list[Citation],
+        *,
+        attachments: list[str] | None = None,
+    ) -> str:
         citation_lines = []
         for index, citation in enumerate(citations, start=1):
             cite_dict = citation.to_dict()
@@ -85,6 +91,7 @@ def build_openai_answer_rewriter_from_env() -> Callable[[str, str, list[Citation
 
         system = build_rewriter_system_prompt(
             include_comparison_schema=is_comparison_question(question),
+            attachment_names=attachments,
         )
 
         user = (

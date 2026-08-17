@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -7,6 +7,7 @@ import "katex/dist/katex.min.css";
 import ChatSidebar from "./components/ChatSidebar";
 import AuthExperience from "./components/AuthExperience";
 import AdminPortal from "./components/AdminPortal";
+import MessageActions from "./components/MessageActions";
 import {
   ApiError,
   assignConversationToProject,
@@ -21,6 +22,7 @@ import {
   pinConversation,
   renameProject,
   sendChat,
+  uploadChatAttachment,
   withAuthedFileUrl,
 } from "./api";
 import { clearSession, getUserEmail, isAuthenticated, signOut } from "./auth";
@@ -63,6 +65,31 @@ function SendIcon() {
   );
 }
 
+function AttachIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+function PdfGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden>
+      <path
+        d="M14 2.5H7.5A2.5 2.5 0 0 0 5 5v14a2.5 2.5 0 0 0 2.5 2.5h9A2.5 2.5 0 0 0 19 19V7.5z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path d="M14 2.5V7a.5.5 0 0 0 .5.5H19" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <text x="12" y="17.4" textAnchor="middle" fontSize="6.4" fontWeight="700" fill="currentColor">
+        PDF
+      </text>
+    </svg>
+  );
+}
+
 function messagesFromConversation(record) {
   if (!record?.messages?.length) {
     return [];
@@ -74,7 +101,44 @@ function messagesFromConversation(record) {
     citations: message.citations ?? [],
     videos: message.videos ?? [],
     videoSuggestions: message.video_suggestions ?? [],
+    // Names only: the file itself was never kept, so a reopened chat shows what
+    // was asked about without pretending the document is still readable.
+    attachments: message.attachments ?? [],
   }));
+}
+
+/** One attached file, from the moment it is picked to the moment it is read.
+ *
+ * The chip appears the instant a file is chosen, showing a spinner in place of
+ * the icon, so choosing a large PDF never looks like nothing happened.
+ */
+function AttachmentChip({ item, onRemove }) {
+  const failed = item.status === "error";
+  return (
+    <div className={`attach-chip ${item.status}`} title={failed ? item.error : item.name}>
+      <span className="attach-chip-icon" aria-hidden="true">
+        {item.status === "loading" ? <span className="attach-spinner" /> : <PdfGlyph />}
+      </span>
+      <span className="attach-chip-text">
+        <span className="attach-chip-name">{item.name}</span>
+        <span className="attach-chip-kind">
+          {item.status === "loading" ? "Reading…" : failed ? item.error : "PDF"}
+        </span>
+      </span>
+      {onRemove ? (
+        <button
+          type="button"
+          className="attach-chip-remove"
+          onClick={() => onRemove(item.localId)}
+          aria-label={`Remove ${item.name}`}
+        >
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 function ChatApp() {
@@ -91,8 +155,15 @@ function ChatApp() {
   const [followUpSuggestions, setFollowUpSuggestions] = useState([]);
   const [canManageLibrary, setCanManageLibrary] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [attachments, setAttachments] = useState([]);
 
-  const canSubmit = useMemo(() => question.trim().length > 0 && !isLoading, [question, isLoading]);
+  // Nothing may be sent while a file is still being read - the answer would be
+  // written without the document the question is about.
+  const uploading = attachments.some((item) => item.status === "loading");
+  const canSubmit = useMemo(
+    () => question.trim().length > 0 && !isLoading && !uploading,
+    [question, isLoading, uploading],
+  );
   const hasStarted = messages.length > 0;
   const showAuthModal = !authed;
 
@@ -163,6 +234,58 @@ function ChatApp() {
     setMessages([]);
     setFollowUpSuggestions([]);
     setQuestion("");
+    setAttachments([]);
+  }
+
+  // The file is read on the server, which keeps it for this session only - it is
+  // never added to the library everyone queries.
+  async function handleAttach(files) {
+    const picked = Array.from(files ?? []);
+    if (!picked.length) return;
+    setError("");
+
+    const pending = picked.map((file) => ({
+      localId: crypto.randomUUID(),
+      name: file.name,
+      status: "loading",
+      attachmentId: null,
+      error: "",
+    }));
+    setAttachments((current) => [...current, ...pending]);
+
+    await Promise.all(
+      picked.map(async (file, index) => {
+        const { localId } = pending[index];
+        try {
+          const saved = await uploadChatAttachment(file);
+          setAttachments((current) =>
+            current.map((item) =>
+              item.localId === localId
+                ? {
+                    ...item,
+                    status: "ready",
+                    attachmentId: saved.attachment_id,
+                    name: saved.file_name || item.name,
+                    pageCount: saved.page_count,
+                  }
+                : item,
+            ),
+          );
+        } catch (uploadError) {
+          const message =
+            uploadError instanceof Error ? uploadError.message : "We could not read that file.";
+          setAttachments((current) =>
+            current.map((item) =>
+              item.localId === localId ? { ...item, status: "error", error: message } : item,
+            ),
+          );
+        }
+      }),
+    );
+  }
+
+  function removeAttachment(localId) {
+    setAttachments((current) => current.filter((item) => item.localId !== localId));
   }
 
   async function handleSelectConversation(conversationId) {
@@ -253,15 +376,28 @@ function ChatApp() {
     return record.conversation_id;
   }
 
-  async function sendQuestion(text) {
+  async function sendQuestion(text, { attach = attachments } = {}) {
     const trimmed = text.trim();
     if (!trimmed) return;
 
+    const ready = attach.filter((item) => item.status === "ready");
     setError("");
     setIsLoading(true);
     setFollowUpSuggestions([]);
-    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text: trimmed }]);
+    setMessages((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        text: trimmed,
+        attachments: ready.map((item) => ({ file_name: item.name, page_count: item.pageCount })),
+        // Kept so "Ask again" re-asks with the same documents rather than
+        // silently dropping them.
+        attachmentIds: ready.map((item) => item.attachmentId),
+      },
+    ]);
     setQuestion("");
+    setAttachments([]);
 
     try {
       const conversationId = await ensureConversationId();
@@ -269,6 +405,7 @@ function ChatApp() {
         question: trimmed,
         conversation_id: conversationId,
         unit_preference: unitPreference || null,
+        attachment_ids: ready.map((item) => item.attachmentId),
       });
       setMessages((current) => [
         ...current,
@@ -293,13 +430,35 @@ function ChatApp() {
 
   function onSubmit(event) {
     event.preventDefault();
+    if (!canSubmit) return;
     void sendQuestion(question);
   }
 
   function onKeyDown(event) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
+      if (!canSubmit) return;
       void sendQuestion(question);
+    }
+  }
+
+  // "Ask again" re-sends the question that produced this answer, with whatever
+  // was attached to it, as a new turn - the old exchange stays readable above.
+  function retryFrom(index) {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const candidate = messages[cursor];
+      if (candidate.role === "user") {
+        const ids = candidate.attachmentIds ?? [];
+        void sendQuestion(candidate.text, {
+          attach: ids.map((attachmentId, position) => ({
+            status: "ready",
+            attachmentId,
+            name: candidate.attachments?.[position]?.file_name ?? "Attachment",
+            pageCount: candidate.attachments?.[position]?.page_count,
+          })),
+        });
+        return;
+      }
     }
   }
 
@@ -323,7 +482,16 @@ function ChatApp() {
     );
   }
 
-  const composerProps = { question, setQuestion, canSubmit, onSubmit, onKeyDown };
+  const composerProps = {
+    question,
+    setQuestion,
+    canSubmit,
+    onSubmit,
+    onKeyDown,
+    attachments,
+    onAttach: handleAttach,
+    onRemoveAttachment: removeAttachment,
+  };
   // Units selector hidden: in prod the OpenAI rewriter strips the appended unit-conversion
   // note (it forbids numbers not in the source), so the control had no visible effect.
   // unitPreference is retained (sent as-is) so a real unit feature can be re-added later.
@@ -382,6 +550,8 @@ function ChatApp() {
             followUpSuggestions={followUpSuggestions}
             sendQuestion={sendQuestion}
             composerProps={composerProps}
+            conversationId={activeConversationId}
+            onRetry={retryFrom}
           />
         ) : (
           <EmptyState error={error} composerProps={composerProps} />
@@ -408,12 +578,21 @@ function EmptyState({ error, composerProps }) {
   );
 }
 
-function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuestion, composerProps }) {
+function ChatThread({
+  messages,
+  isLoading,
+  error,
+  followUpSuggestions,
+  sendQuestion,
+  composerProps,
+  conversationId,
+  onRetry,
+}) {
   return (
     <div className="chat-body">
       <div className="chat-content">
         <div className="message-scroll">
-          {messages.map((message) => (
+          {messages.map((message, index) => (
             <div key={message.id} className={`msg-row ${message.role}`}>
               <div className={`bubble ${message.role === "user" ? "user" : "bot"}`}>
                 {message.role === "assistant" ? (
@@ -423,7 +602,19 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
                     </ReactMarkdown>
                   </div>
                 ) : (
-                  <p className="message-text-plain">{message.text}</p>
+                  <>
+                    {message.attachments?.length > 0 && (
+                      <div className="msg-attachments">
+                        {message.attachments.map((file) => (
+                          <span className="msg-attachment" key={file.file_name}>
+                            <PdfGlyph />
+                            {file.file_name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <p className="message-text-plain">{message.text}</p>
+                  </>
                 )}
 
                 {message.videos?.length > 0 && (
@@ -454,7 +645,17 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
                               ? `, pages ${citation.page_start}-${citation.page_end}`
                               : `, page ${citation.page_start}`
                             : "";
-                        const docLine = (
+                        // An attachment belongs to the person who asked, not to the
+                        // library, so it is labelled as theirs and never linked -
+                        // the file was read for the question and not kept.
+                        const attached = citation.source_kind === "attachment";
+                        const docLine = attached ? (
+                          <>
+                            <strong>Your document</strong>
+                            {", "}
+                            {citation.title}
+                          </>
+                        ) : (
                           <>
                             <strong>{citation.standard_id}</strong>
                             {", "}
@@ -463,7 +664,9 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
                         );
                         // GRI/ASTM citations link out (member portal / ASTM Compass);
                         // everything else falls back to the inline authed PDF.
-                        const href = citation.source_url || withAuthedFileUrl(citation.pdf_url);
+                        const href = attached
+                          ? null
+                          : citation.source_url || withAuthedFileUrl(citation.pdf_url);
                         return (
                           <li key={citation.chunk_id}>
                             {href ? (
@@ -481,6 +684,15 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
                     </ul>
                   </div>
                 )}
+
+                {message.role === "assistant" && !message.needsClarification ? (
+                  <MessageActions
+                    answer={message.text}
+                    conversationId={conversationId}
+                    canRetry={!isLoading}
+                    onRetry={() => onRetry(index)}
+                  />
+                ) : null}
               </div>
             </div>
           ))}
@@ -505,20 +717,63 @@ function ChatThread({ messages, isLoading, error, followUpSuggestions, sendQuest
   );
 }
 
-function Composer({ question, setQuestion, canSubmit, onSubmit, onKeyDown, variant }) {
+function Composer({
+  question,
+  setQuestion,
+  canSubmit,
+  onSubmit,
+  onKeyDown,
+  variant,
+  attachments = [],
+  onAttach,
+  onRemoveAttachment,
+}) {
+  const fileInput = useRef(null);
+
   return (
     <form className={`composer-inner ${variant}`} onSubmit={onSubmit}>
-      <textarea
-        className="composer-input"
-        value={question}
-        onChange={(event) => setQuestion(event.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder="Ask anything about standards…"
-        rows={1}
-      />
-      <button type="submit" className="send-btn" disabled={!canSubmit} aria-label="Send">
-        <SendIcon />
-      </button>
+      {attachments.length > 0 ? (
+        <div className="composer-attachments">
+          {attachments.map((item) => (
+            <AttachmentChip key={item.localId} item={item} onRemove={onRemoveAttachment} />
+          ))}
+        </div>
+      ) : null}
+
+      <div className="composer-row">
+        <input
+          ref={fileInput}
+          type="file"
+          accept="application/pdf,.pdf"
+          multiple
+          className="composer-file-input"
+          onChange={(event) => {
+            void onAttach?.(event.target.files);
+            // Reset so picking the same file twice still fires a change.
+            event.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          className="attach-btn"
+          onClick={() => fileInput.current?.click()}
+          aria-label="Attach a PDF"
+          title="Attach a PDF"
+        >
+          <AttachIcon />
+        </button>
+        <textarea
+          className="composer-input"
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="Ask anything about standards…"
+          rows={1}
+        />
+        <button type="submit" className="send-btn" disabled={!canSubmit} aria-label="Send">
+          <SendIcon />
+        </button>
+      </div>
     </form>
   );
 }

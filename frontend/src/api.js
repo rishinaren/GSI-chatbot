@@ -307,6 +307,36 @@ export function revokeLibraryAccess(email) {
   return request(`/admin/people/${encodeURIComponent(email)}`, { method: "DELETE" });
 }
 
+export function getAdminFeedback() {
+  return request("/admin/feedback");
+}
+
+// ---- Question attachments + answer feedback ----
+
+// The PDF is read server-side and held there for the session; the browser only
+// ever holds the id it gets back.
+export function uploadChatAttachment(file) {
+  const form = new FormData();
+  form.append("file", file);
+  return upload("/chat/attachments", form);
+}
+
+// Pass feedbackId/createdAt from an earlier response to add a comment to that
+// same rating instead of recording a second one.
+export function submitFeedback({ conversationId, rating, comment, answer, feedbackId, createdAt }) {
+  return request("/feedback", {
+    method: "POST",
+    body: JSON.stringify({
+      conversation_id: conversationId,
+      rating,
+      comment: comment ?? "",
+      answer: answer ?? "",
+      feedback_id: feedbackId ?? "",
+      created_at: createdAt ?? "",
+    }),
+  });
+}
+
 export function searchVideos(query, topK = 3) {
   return request("/videos/search", {
     method: "POST",

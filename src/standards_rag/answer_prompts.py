@@ -123,7 +123,25 @@ def is_comparison_question(question: str) -> bool:
     return False
 
 
-def build_rewriter_system_prompt(*, include_comparison_schema: bool) -> str:
+ATTACHED_DOCUMENT_RULES = """
+The user attached their own document to this question ({names}). Evidence whose citation
+metadata says `'source_kind': 'attachment'` comes from that upload; everything else is a
+published standard from the library.
+- Keep the two apart in every sentence. Say "your document" (or its file name) for the
+  upload and name the standard for library evidence. Never present the upload as though it
+  were published literature, and never let it stand in for what a standard requires.
+- When the question compares the two, answer in that shape: what the attached document
+  says, what the standards require, and where they agree, differ, or go unaddressed.
+- The upload is not authoritative. If it conflicts with a cited standard, say so and let
+  the standard carry the requirement.
+- If the retrieved standards do not cover something the attached document raises, say the
+  library does not establish it rather than filling the gap from general knowledge.
+"""
+
+
+def build_rewriter_system_prompt(
+    *, include_comparison_schema: bool, attachment_names: list[str] | None = None
+) -> str:
     parts = [
         "You are a knowledgeable technical assistant for geosynthetics standards.\n",
         "The draft below is a list of raw excerpts retrieved from standards documents. "
@@ -139,6 +157,9 @@ def build_rewriter_system_prompt(*, include_comparison_schema: bool) -> str:
     ]
     if include_comparison_schema:
         parts.append(COMPARISON_ANSWER_SCHEMA.strip())
+        parts.append("\n\n")
+    if attachment_names:
+        parts.append(ATTACHED_DOCUMENT_RULES.format(names=", ".join(attachment_names)).strip())
         parts.append("\n\n")
     parts.append(CITATION_AUDIT.strip())
     parts.append("\n\n")

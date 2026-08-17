@@ -3,7 +3,15 @@ import AdminDashboard from "./AdminDashboard";
 import AdminDocuments from "./AdminDocuments";
 import AdminVideos from "./AdminVideos";
 import AdminAccess from "./AdminAccess";
-import { BackIcon, DashboardIcon, LibraryIcon, PeopleIcon, VideoIcon } from "./AdminIcons";
+import AdminFeedback from "./AdminFeedback";
+import {
+  BackIcon,
+  DashboardIcon,
+  FeedbackIcon,
+  LibraryIcon,
+  PeopleIcon,
+  VideoIcon,
+} from "./AdminIcons";
 
 // The admin portal replaces the chat shell rather than floating over it: an
 // administrator here is looking after the knowledge base, so Chats and Projects
@@ -31,6 +39,13 @@ const SECTIONS = [
     icon: VideoIcon,
     title: "Videos",
     subtitle: "The walkthroughs offered alongside answers, and the standards they cover.",
+  },
+  {
+    key: "feedback",
+    label: "Feedback",
+    icon: FeedbackIcon,
+    title: "Feedback",
+    subtitle: "Answers people rated, and what they said about them.",
   },
   {
     key: "access",
@@ -119,6 +134,8 @@ export default function AdminPortal({ email, onExit, onSignOut }) {
             />
           ) : section === "videos" ? (
             <AdminVideos head={active} />
+          ) : section === "feedback" ? (
+            <AdminFeedback head={active} />
           ) : (
             <AdminAccess head={active} />
           )}

@@ -104,6 +104,10 @@ class Citation:
     quote: str | None = None
     pdf_url: str | None = None
     source_url: str | None = None
+    # "library" = a standard we hold; "attachment" = a document the asker brought
+    # with their question. The distinction has to survive to the UI, which must
+    # never present someone's own upload as though it were published literature.
+    source_kind: str = "library"
 
     @property
     def page_label(self) -> str:
@@ -129,4 +133,5 @@ class Citation:
             quote=data.get("quote"),
             pdf_url=data.get("pdf_url"),
             source_url=data.get("source_url"),
+            source_kind=str(data.get("source_kind") or "library"),
         )
