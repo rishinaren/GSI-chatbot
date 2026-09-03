@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GSI Standards Assistant - Figures</title>
+<style>
+  @page { size: 11in 8.5in; margin: 0; }
+  * { box-sizing: border-box; }
+  :root{
+    --ink:#1b1c1a; --ink2:#4a4c46; --muted:#83867d; --faint:#a8aba1;
+    --line:#dedcd4; --line2:#ecebe5; --paper:#fff;
+    --olive:#6c8350; --olive-mid:#8aa06e; --olive-soft:#eff3e8; --olive-line:#c2d0ae;
+    --amber:#a06c33; --amber-soft:#fbf3e9; --amber-line:#e6d1b1;
+    --slate-soft:#eef1f4; --slate-line:#ccd7df;
+    --sans: -apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;
+    --mono: 'SF Mono',Menlo,Consolas,monospace;
+  }
+  html,body{ margin:0; padding:0; background:#fff; }
+  body{ font-family:var(--sans); color:var(--ink); -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+
+  .page{ width:11in; height:8.5in; padding:.62in .7in; page-break-after:always;
+         display:flex; flex-direction:column; justify-content:center; position:relative; overflow:hidden; background:#fff; }
+  .page:last-child{ page-break-after:auto; }
+
+  /* ---------- minimal caption, no document chrome ---------- */
+  .cap{ display:flex; align-items:baseline; gap:11px; margin-bottom:24px; }
+  .cap .n{ font-family:var(--mono); font-size:9.5px; font-weight:600; letter-spacing:.14em;
+           text-transform:uppercase; color:var(--olive); }
+  .cap h2{ font-size:18px; font-weight:600; margin:0; letter-spacing:-.01em; color:var(--ink); }
+
+  /* ---------- atoms ---------- */
+  .lab{ font-family:var(--mono); font-size:8.5px; letter-spacing:.16em; text-transform:uppercase;
+        color:var(--faint); margin-bottom:9px; display:flex; align-items:center; gap:9px; }
+  .lab::after{ content:''; flex:1; height:1px; background:var(--line2); }
+
+  .row{ display:grid; gap:12px; }
+  .node{ border:1px solid var(--line); background:var(--paper); border-radius:6px;
+         padding:14px 15px; display:flex; flex-direction:column; justify-content:center; }
+  .node .t{ font-size:12.5px; font-weight:600; line-height:1.3; letter-spacing:-.005em; }
+  .node .d{ font-size:10.5px; color:var(--muted); line-height:1.4; margin-top:5px; }
+  .node.olive{ background:var(--olive-soft); border-color:var(--olive-line); }
+  .node.olive .t{ color:#3f5230; }
+  .node.slate{ background:var(--slate-soft); border-color:var(--slate-line); }
+  .node.amber{ background:var(--amber-soft); border-color:var(--amber-line); }
+  .node.amber .t{ color:#7d5323; }
+  .node.dash{ border-style:dashed; background:#fcfcfa; }
+  .node.dark{ background:#232327; border-color:#232327; }
+  .node.dark .t{ color:#fff; }
+  .node.dark .k{ color:var(--olive-mid); }
+  .node .k{ font-family:var(--mono); font-size:8px; letter-spacing:.13em;
+            text-transform:uppercase; color:var(--faint); margin-bottom:6px; }
+
+  .chip{ border:1px solid var(--line); border-radius:6px; padding:13px 12px; text-align:center; background:#fff; }
+  .chip b{ display:block; font-size:17px; font-weight:600; letter-spacing:-.01em; }
+  .chip span{ font-family:var(--mono); font-size:8.5px; letter-spacing:.13em;
+              text-transform:uppercase; color:var(--faint); }
+
+  .down{ height:22px; position:relative; }
+  .down::before{ content:''; position:absolute; left:50%; top:0; bottom:5px; width:1px; background:var(--olive-line); }
+  .down::after{ content:''; position:absolute; left:50%; bottom:0; transform:translateX(-50%);
+                border-left:3.5px solid transparent; border-right:3.5px solid transparent; border-top:5px solid var(--olive-mid); }
+
+  .mono{ font-family:var(--mono); }
+  .spacer{ flex:1; }
+</style>
+</head>
+<body>
+
+<!-- ============================== FIGURE 1 ============================== -->
+<section class="page">
+  <div class="cap"><span class="n">Figure 1</span><h2>System architecture</h2></div>
+
+  <div class="lab">What the assistant reads</div>
+  <div class="row" style="grid-template-columns:repeat(5,1fr)">
+    <div class="chip"><b>40</b><span>ASTM</span></div>
+    <div class="chip"><b>114</b><span>GRI</span></div>
+    <div class="chip"><b>1</b><span>ISO</span></div>
+    <div class="chip"><b>24</b><span>Video walkthroughs</span></div>
+    <div class="chip" style="border-style:dashed;background:#fcfcfa"><b style="font-size:11.5px;padding-top:2px">Your own PDF</b><span>Optional, per question</span></div>
+  </div>
+
+  <div class="down"></div>
+
+  <div class="lab">Building the library &nbsp;&middot;&nbsp; once per document</div>
+  <div class="row" style="grid-template-columns:repeat(4,1fr)">
+    <div class="node olive"><div class="t">Read the PDF</div><div class="d">Page by page</div></div>
+    <div class="node olive"><div class="t">Split into chunks</div><div class="d">Each keeps its standard, section and page</div></div>
+    <div class="node olive"><div class="t">Create embeddings</div><div class="d">Meaning turned into numbers</div></div>
+    <div class="node olive"><div class="t">Store</div><div class="d">Vector index + keyword index</div></div>
+  </div>
+
+  <div class="down"></div>
+
+  <div class="lab">Answering a question &nbsp;&middot;&nbsp; every time someone asks</div>
+  <div class="row" style="grid-template-columns:repeat(4,1fr)">
+    <div class="node"><div class="k">Retrieval</div><div class="t">Find the passages</div><div class="d">Meaning search and exact-designation search, together</div></div>
+    <div class="node"><div class="k">Reranking</div><div class="t">Sort by relevance</div><div class="d">Most on-point passage leads</div></div>
+    <div class="node"><div class="k">Grounded generation</div><div class="t">Write from those passages only</div><div class="d">Nothing from outside the library</div></div>
+    <div class="node"><div class="k">Validation</div><div class="t">Check every citation</div><div class="d">Unsupported claims are dropped</div></div>
+  </div>
+
+  <div class="down"></div>
+
+  <div class="row" style="grid-template-columns:2fr 1fr 1fr">
+    <div class="node olive" style="padding:13px 14px"><div class="t" style="font-size:12.5px">Answer &middot; page-bound citations &middot; matching video</div></div>
+    <div class="node"><div class="k">Serving</div><div class="t">FastAPI on AWS</div></div>
+    <div class="node"><div class="k">Client</div><div class="t">React on AWS Amplify</div></div>
+  </div>
+
+  <div style="height:30px"></div>
+
+  <div style="border-top:1px solid var(--line2); padding-top:12px">
+    <div style="font-family:var(--mono);font-size:8px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:9px">In plain language</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px 32px;font-size:11px;line-height:1.5;color:var(--ink2)">
+      <div><b style="color:var(--ink)">Chunk</b> - a short passage of a standard.</div>
+      <div><b style="color:var(--ink)">Embedding</b> - a numeric fingerprint of meaning.</div>
+      <div><b style="color:var(--ink)">Vector index</b> - finds meaning, not exact words.</div>
+      <div><b style="color:var(--ink)">Keyword index</b> - catches exact codes like D5199.</div>
+      <div><b style="color:var(--ink)">Reranking</b> - puts the best passage first.</div>
+      <div><b style="color:var(--ink)">Grounded</b> - written only from what was found.</div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .flowwrap{ display:grid; grid-template-columns:1.28fr 1fr; gap:34px; flex:none; }
+  .fbox{ border:1px solid var(--line); background:#fff; border-radius:6px; padding:13px 15px;
+         font-size:12.5px; font-weight:600; letter-spacing:-.005em; }
+  .fbox.olive{ background:var(--olive-soft); border-color:var(--olive-line); color:#3f5230; }
+  .fbox.amber{ background:var(--amber-soft); border-color:var(--amber-line); color:#7d5323; font-weight:500; }
+  .fbox.dark{ background:#232327; border-color:#232327; color:#fff; padding:14px 15px; }
+  .fbox.dark .kk{ font-family:var(--mono); font-size:7.5px; letter-spacing:.16em;
+                  text-transform:uppercase; color:var(--olive-mid); margin-bottom:5px; font-weight:600; }
+  .fdia{ border:1px solid var(--olive-line); background:#fff; border-radius:6px; padding:12px 15px;
+         font-size:12.5px; font-weight:600; display:flex; align-items:center; gap:8px; }
+  .fdia::before{ content:''; width:7px; height:7px; background:var(--olive-mid); transform:rotate(45deg); flex:none; }
+  .farr{ height:24px; position:relative; margin-left:22px; }
+  .farr::before{ content:''; position:absolute; left:0; top:0; bottom:5px; width:1px; background:var(--olive-line); }
+  .farr::after{ content:''; position:absolute; left:0; bottom:0; transform:translateX(-50%);
+                border-left:3.5px solid transparent; border-right:3.5px solid transparent; border-top:5px solid var(--olive-mid); }
+  .farr .yes{ position:absolute; left:8px; top:3px; font-family:var(--mono); font-size:7.5px;
+              letter-spacing:.12em; color:var(--faint); }
+  .fsplit{ display:grid; grid-template-columns:1fr 40px 1.02fr; align-items:center; }
+  .fno{ position:relative; height:1px; background:var(--amber-line); }
+  .fno::after{ content:''; position:absolute; right:0; top:50%; transform:translateY(-50%);
+               border-top:3.5px solid transparent; border-bottom:3.5px solid transparent; border-left:5px solid var(--amber-line); }
+  .fno span{ position:absolute; left:50%; transform:translateX(-50%); top:-11px;
+             font-family:var(--mono); font-size:7.5px; letter-spacing:.12em; color:var(--amber); background:#fff; padding:0 3px; }
+
+  .panel{ border:1px solid var(--line); border-radius:7px; padding:20px 21px; background:#fcfcfa; height:fit-content; }
+  .panel h3{ font-size:13.5px; font-weight:600; margin:0 0 15px; letter-spacing:-.01em; }
+  .fb{ display:flex; align-items:flex-start; gap:9px; background:#fff; border:1px solid var(--line);
+       border-radius:6px; padding:12px 13px; margin-bottom:9px; }
+  .fb .ico{ font-size:14px; line-height:1.1; flex:none; }
+  .fb .tx{ flex:1; font-size:12px; font-weight:600; letter-spacing:-.005em; }
+  .fb .tx em{ display:block; font-style:normal; font-size:10.5px; font-weight:400; color:var(--muted); margin-top:2px; }
+  .tag{ font-family:var(--mono); font-size:7px; letter-spacing:.12em; text-transform:uppercase;
+        border:1px solid var(--olive-line); color:var(--olive); border-radius:3px; padding:2px 5px; flex:none; }
+  .tag.next{ border-color:var(--line); color:var(--faint); }
+</style>
+
+<!-- ============================== FIGURE 2 ============================== -->
+<section class="page">
+  <div class="cap"><span class="n">Figure 2</span><h2>User flow</h2></div>
+
+  <div class="flowwrap">
+    <div>
+      <div class="fbox olive">A researcher asks a question, in plain English</div>
+      <div class="farr"></div>
+      <div class="fbox">Search the library</div>
+      <div class="farr"></div>
+
+      <div class="fsplit">
+        <div class="fdia">Evidence found?</div>
+        <div class="fno"><span>No</span></div>
+        <div class="fbox amber">Say that evidence was not found</div>
+      </div>
+
+      <div class="farr"><span class="yes">Yes</span></div>
+      <div class="fbox">Retrieve passages and their sources</div>
+      <div class="farr"></div>
+
+      <div class="fsplit">
+        <div class="fdia">Sources agree?</div>
+        <div class="fno"><span>No</span></div>
+        <div class="fbox amber">Show each position, separately cited</div>
+      </div>
+
+      <div class="farr"><span class="yes">Yes</span></div>
+      <div class="fbox">Generate the grounded answer</div>
+      <div class="farr"></div>
+
+      <div class="fsplit">
+        <div class="fbox dark"><div class="kk">Answer</div>Summary &middot; Supporting evidence &middot; Citations</div>
+        <div class="fno" style="background:var(--olive-line)"><span style="color:var(--olive)">Then</span></div>
+        <div class="fbox olive">Rate it, or turn it into a report</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>After the answer</h3>
+
+      <div class="fb">
+        <div class="ico">&#128077;</div>
+        <div class="tx">Helpful</div>
+        <div class="tag">Live</div>
+      </div>
+
+      <div class="fb">
+        <div class="ico">&#128078;</div>
+        <div class="tx">Not helpful<em>Opens a comment box</em></div>
+        <div class="tag">Live</div>
+      </div>
+
+      <div class="fb" style="border-style:dashed">
+        <div class="ico">&#128196;</div>
+        <div class="tx">Generate report &rarr; PDF<em>Selected answers exported as one document</em></div>
+        <div class="tag next">Next</div>
+      </div>
+
+      <div style="border-top:1px solid var(--line2);margin-top:14px;padding-top:12px">
+        <div style="font-family:var(--mono);font-size:7.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:8px">The report carries</div>
+        <div style="font-size:11px;line-height:1.65;color:var(--ink2)">
+          Question &middot; answer &middot; every citation with its page &middot; link to each source &middot; date
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--line2);margin-top:13px;padding-top:12px">
+        <div style="font-family:var(--mono);font-size:7.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:8px">Back to the library</div>
+        <div style="font-size:11px;line-height:1.55;color:var(--ink2)">
+          A disliked answer usually means a missing standard. Ratings land in the admin portal, next to the question that produced them.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .shot{ position:relative; border:1px solid var(--line); border-radius:7px; overflow:hidden; line-height:0; }
+  .shot img{ width:100%; display:block; }
+  .mk{ position:absolute; width:17px; height:17px; border-radius:50%; background:var(--olive); color:#fff;
+       font-family:var(--mono); font-size:9px; font-weight:700; display:flex; align-items:center;
+       justify-content:center; transform:translate(-50%,-50%); box-shadow:0 0 0 2.5px rgba(255,255,255,.92); }
+  .caption{ font-size:10.5px; color:var(--muted); text-align:center; margin-top:8px; line-height:1.4; }
+  .keys{ display:grid; }
+  .key{ display:flex; gap:8px; align-items:flex-start; }
+  .kn{ width:15px; height:15px; border-radius:50%; background:var(--olive); color:#fff; flex:none;
+       font-family:var(--mono); font-size:8.5px; font-weight:700; display:flex; align-items:center; justify-content:center; margin-top:1px; }
+  .kt{ font-size:11.5px; line-height:1.4; font-weight:600; letter-spacing:-.005em; }
+</style>
+
+<!-- ============================== FIGURE 3 ============================== -->
+<section class="page">
+  <div class="cap"><span class="n">Figure 3</span><h2>Asking across the literature</h2></div>
+
+  <div style="display:flex; flex-direction:column;">
+    <div class="shot" style="width:8.7in; margin:0 auto;">
+      <img src="fig3-chat.png" alt="GSI Chatbot answering a cross-standard question">
+      <div class="mk" style="left:40%;  top:15%;">1</div>
+      <div class="mk" style="left:88.5%;top:44%;">2</div>
+      <div class="mk" style="left:88.5%;top:74.8%;">3</div>
+      <div class="mk" style="left:27.5%;top:77.5%;">4</div>
+    </div>
+
+    <div style="margin-top:24px;">
+      <div class="keys" style="grid-template-columns:repeat(4,1fr); gap:0 26px;">
+        <div class="key"><span class="kn">1</span><span class="kt">A question no single standard answers</span></div>
+        <div class="key"><span class="kn">2</span><span class="kt">Inline markers tie each claim to a passage</span></div>
+        <div class="key"><span class="kn">3</span><span class="kt">Section and page on every citation</span></div>
+        <div class="key"><span class="kn">4</span><span class="kt">Three publishing bodies, cited separately</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== FIGURE 4 ============================== -->
+<section class="page">
+  <div class="cap"><span class="n">Figure 4</span><h2>The administrator's portal</h2></div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:.26in;">
+    <div>
+      <div class="shot"><img src="fig4-admin-dashboard.png" alt="Admin portal dashboard"></div>
+      <div class="caption"><b style="color:var(--ink)">Dashboard.</b> What the assistant knows, and where it came from.</div>
+    </div>
+    <div>
+      <div class="shot"><img src="fig4b-admin-documents.png" alt="Admin portal document library"></div>
+      <div class="caption"><b style="color:var(--ink)">Documents.</b> The full library, filterable by publishing body.</div>
+    </div>
+  </div>
+
+  <div style="margin-top:26px;">
+    <div class="lab">Adding a standard</div>
+    <div class="row" style="grid-template-columns:repeat(4,1fr)">
+      <div class="node olive"><div class="k">Step 1</div><div class="t">Drop in the PDF</div><div class="d">The portal proposes number, title, body, year</div></div>
+      <div class="node olive"><div class="k">Step 2</div><div class="t">Confirm or correct</div><div class="d">Nothing is written until this point</div></div>
+      <div class="node"><div class="k">On confirm</div><div class="t">Answerable immediately</div><div class="d">Re-uploading replaces, never duplicates</div></div>
+      <div class="node"><div class="k">Also in the portal</div><div class="t">Videos &middot; Feedback &middot; Access</div><div class="d">Walkthroughs, rated answers, who may curate</div></div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .step{ border:1px solid var(--line); border-radius:6px; padding:15px 15px; display:flex; flex-direction:column; }
+  .step .sn{ font-size:22px; font-weight:600; color:var(--olive-mid); line-height:1; margin-bottom:9px; }
+  .step .st{ font-size:12.5px; font-weight:600; line-height:1.3; letter-spacing:-.005em; }
+  .step .sd{ font-size:10.5px; color:var(--muted); line-height:1.4; margin-top:5px; }
+  .step .so{ font-family:var(--mono); font-size:8px; letter-spacing:.11em; text-transform:uppercase;
+             color:var(--faint); margin-top:auto; padding-top:10px; }
+  .loop{ position:relative; height:34px; width:100%; flex:none; }
+  .loop .lline{ position:absolute; left:30%; right:10%; top:12px; bottom:0; border:1px dashed var(--olive-line); border-top:none; border-radius:0 0 8px 8px; }
+  .loop .ltx{ position:absolute; left:50%; transform:translateX(-50%); bottom:-7px; white-space:nowrap; background:#fff; padding:0 9px;
+              font-family:var(--mono); font-size:7.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--olive); }
+  .loop .lar{ position:absolute; left:30%; top:6px; transform:translateX(-50%);
+              border-left:3.5px solid transparent; border-right:3.5px solid transparent; border-bottom:5px solid var(--olive-mid); }
+  .split{ display:grid; grid-template-columns:1fr 1fr; gap:.28in; }
+  .split h4{ font-size:12px; font-weight:600; margin:0 0 9px; letter-spacing:-.005em; }
+  .split ul{ margin:0; padding:0; list-style:none; columns:2; column-gap:20px;
+             font-size:10.5px; line-height:1.7; color:var(--ink2); }
+  .split li::before{ content:'\2022'; color:var(--olive-mid); margin-right:6px; }
+</style>
+
+<!-- ============================== FIGURE 5 ============================== -->
+<section class="page">
+  <div class="cap"><span class="n">Figure 5</span><h2>Extending the platform to IGS</h2></div>
+
+  <div style="display:grid; grid-template-columns:1fr 1.55fr 1fr; gap:14px; align-items:stretch;">
+    <div class="node dark" style="padding:13px 14px">
+      <div class="k">Built and in production</div>
+      <div class="t" style="font-size:15px">GSI</div>
+      <div class="d" style="color:#a8aba1">155 standards &middot; 24 videos &middot; live admin portal</div>
+    </div>
+    <div class="node olive" style="padding:13px 15px">
+      <div class="k" style="color:var(--olive)">The shared platform - reused as is</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;font-size:10.5px;line-height:1.65;color:#3f5230;margin-top:3px">
+        <div>Hybrid retrieval &amp; reranking</div><div>Citation binding</div>
+        <div>Grounded generation</div><div>Admin portal &amp; upload</div>
+        <div>Feedback capture</div><div>Auth, access control, AWS</div>
+      </div>
+    </div>
+    <div class="node dash" style="padding:13px 14px">
+      <div class="k">To be stood up</div>
+      <div class="t" style="font-size:15px">IGS</div>
+      <div class="d">Its own corpus, designations and members - same engine</div>
+    </div>
+  </div>
+
+  <div style="height:22px"></div>
+
+  <div class="lab">The path to an IGS assistant</div>
+  <div class="row" style="grid-template-columns:repeat(5,1fr)">
+    <div class="step">
+      <div class="sn">1</div>
+      <div class="st">Data formatting &amp; assessment</div>
+      <div class="sd">File formats, how designations are written, what can be indexed</div>
+      <div class="so">IGS supplies &middot; GSI assesses</div>
+    </div>
+    <div class="step">
+      <div class="sn">2</div>
+      <div class="st">Modify the architecture</div>
+      <div class="sd">Multi-tenant library, plus an IGS designation parser</div>
+      <div class="so">GSI engineering</div>
+    </div>
+    <div class="step">
+      <div class="sn">3</div>
+      <div class="st">Initial corpus ingestion</div>
+      <div class="sd">IGS documents into their own namespace, kept separate</div>
+      <div class="so">GSI engineering</div>
+    </div>
+    <div class="step">
+      <div class="sn">4</div>
+      <div class="st">MVP of the IGS system</div>
+      <div class="sd">IGS-branded assistant and admin portal</div>
+      <div class="so">GSI builds &middot; IGS reviews</div>
+    </div>
+    <div class="step">
+      <div class="sn">5</div>
+      <div class="st">Beta test &amp; refine</div>
+      <div class="sd">Real questions, rated answers, retrieval tuning</div>
+      <div class="so">IGS tests &middot; GSI refines</div>
+    </div>
+  </div>
+
+  <div class="loop"><div class="lline"></div><div class="lar"></div><div class="ltx">Refine &amp; repeat &middot; steps 2 to 5</div></div>
+
+  <div style="height:16px"></div>
+
+  <div class="lab">Fine-tuning, beta testing, deployment</div>
+  <div class="row" style="grid-template-columns:repeat(3,1fr)">
+    <div class="node"><div class="k">Fine-tuning &middot; steps 2-3</div><div class="t">GSI tunes retrieval, IGS judges the answers</div></div>
+    <div class="node"><div class="k">Beta testing &middot; step 5</div><div class="t">One shared review queue, visible to both</div></div>
+    <div class="node"><div class="k">Deployment &middot; continuous</div><div class="t">One pipeline, two libraries</div></div>
+  </div>
+
+  <div style="height:30px"></div>
+
+  <div class="split" style="border-top:1px solid var(--line2); padding-top:14px">
+    <div>
+      <h4>Carried over - no rebuild</h4>
+      <ul>
+        <li>Retrieval &amp; reranking</li>
+        <li>Grounded generation</li>
+        <li>Feedback review</li>
+        <li>Citation binding</li>
+        <li>Admin portal</li>
+        <li>Auth, hosting, CI/CD</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Genuinely new for IGS</h4>
+      <ul>
+        <li>The IGS corpus</li>
+        <li>A separate index namespace</li>
+        <li>Coverage tuning</li>
+        <li>IGS designation parser</li>
+        <li>IGS branding &amp; members</li>
+        <li>An IGS admin group</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>
