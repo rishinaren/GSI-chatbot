@@ -24,3 +24,9 @@ client_secret*.json
 youtube_token.json
 .youtube_token.json
 .claude/settings.local.json
+
+# Client figure deck (local deliverables - not for dev)
+gsi images/
+figures/
+GSI_IGS_System_Figures.pdf
+node_modules/
