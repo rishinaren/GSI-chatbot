@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { submitFeedback } from "../api";
+import { saveReportPdf } from "../reportPdf";
 
 // What you can do with an answer once you have read it. The row is invisible
 // until the message is hovered or something in it takes focus, so a finished
@@ -53,6 +54,25 @@ function RetryIcon() {
   );
 }
 
+function ReportIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6.5 3.5h7l4 4V20a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z" />
+      <path d="M13.5 3.5V8h4" />
+      <path d="M12 10.5v6M9.5 14l2.5 2.5 2.5-2.5" />
+    </svg>
+  );
+}
+
+function ConversationIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 6.5h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-1.5l-2.5 2v-2H8a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2z" />
+      <path d="M6 9.5H5a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h1v2l2.5-2H11" />
+    </svg>
+  );
+}
+
 async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -79,8 +99,20 @@ async function copyText(text) {
   }
 }
 
-export default function MessageActions({ answer, conversationId, onRetry, canRetry }) {
+export default function MessageActions({
+  question,
+  answer,
+  citations,
+  conversationExchanges,
+  conversationId,
+  onRetry,
+  canRetry,
+}) {
+  const wrapRef = useRef(null);
+  const reportPickerId = useId();
   const [copied, setCopied] = useState(false);
+  const [reportPickerOpen, setReportPickerOpen] = useState(false);
+  const [reportState, setReportState] = useState("idle");
   const [rating, setRating] = useState("");
   const [ticket, setTicket] = useState(null);
   const [boxOpen, setBoxOpen] = useState(false);
@@ -88,6 +120,27 @@ export default function MessageActions({ answer, conversationId, onRetry, canRet
   const [sending, setSending] = useState(false);
   const [thanks, setThanks] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!reportPickerOpen) return undefined;
+
+    const closeOnOutsideClick = (event) => {
+      if (!wrapRef.current?.contains(event.target)) {
+        setReportPickerOpen(false);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") {
+        setReportPickerOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [reportPickerOpen]);
 
   async function handleCopy() {
     const ok = await copyText(answer ?? "");
@@ -98,6 +151,29 @@ export default function MessageActions({ answer, conversationId, onRetry, canRet
     setError("");
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
+  }
+
+  async function handleSaveReport(scope) {
+    if (reportState === "saving") return;
+    setError("");
+    setReportState("saving");
+    try {
+      const report =
+        scope === "conversation"
+          ? { scope, exchanges: conversationExchanges }
+          : { scope: "answer", question, answer, citations };
+      const result = await saveReportPdf(report);
+      if (result.canceled) {
+        setReportState("idle");
+        return;
+      }
+      setReportPickerOpen(false);
+      setReportState("saved");
+      window.setTimeout(() => setReportState("idle"), 1800);
+    } catch {
+      setReportState("idle");
+      setError("We could not create that PDF. Please try again.");
+    }
   }
 
   async function rate(next) {
@@ -146,7 +222,7 @@ export default function MessageActions({ answer, conversationId, onRetry, canRet
   }
 
   return (
-    <div className="msg-actions-wrap">
+    <div className="msg-actions-wrap" ref={wrapRef}>
       <div className="msg-actions">
         <button
           type="button"
@@ -188,7 +264,57 @@ export default function MessageActions({ answer, conversationId, onRetry, canRet
             <RetryIcon />
           </button>
         ) : null}
+        <button
+          type="button"
+          className={`msg-action msg-report-action ${reportState === "saved" ? "on" : ""}`}
+          onClick={() => {
+            setError("");
+            setReportPickerOpen((open) => !open);
+          }}
+          disabled={reportState === "saving"}
+          aria-expanded={reportPickerOpen}
+          aria-controls={reportPickerId}
+          aria-label={reportState === "saved" ? "Report saved" : "Export PDF report"}
+          title="Export PDF report"
+        >
+          {reportState === "saved" ? <TickIcon /> : <ReportIcon />}
+          <span>{reportState === "saving" ? "Preparing…" : reportState === "saved" ? "Saved" : "Export PDF"}</span>
+        </button>
       </div>
+
+      {reportPickerOpen ? (
+        <div
+          className="report-scope-picker"
+          id={reportPickerId}
+          role="group"
+          aria-label="Choose what to include in the PDF"
+        >
+          <button
+            type="button"
+            className="report-scope-option"
+            onClick={() => handleSaveReport("answer")}
+            disabled={reportState === "saving"}
+          >
+            <span className="report-scope-icon"><ReportIcon /></span>
+            <span>
+              <strong>This question &amp; answer</strong>
+              <small>Include its citations</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            className="report-scope-option"
+            onClick={() => handleSaveReport("conversation")}
+            disabled={reportState === "saving"}
+          >
+            <span className="report-scope-icon"><ConversationIcon /></span>
+            <span>
+              <strong>Entire conversation</strong>
+              <small>Every question, answer &amp; citation</small>
+            </span>
+          </button>
+        </div>
+      ) : null}
 
       {boxOpen ? (
         <form className="feedback-box" onSubmit={sendComment}>

@@ -107,6 +107,36 @@ function messagesFromConversation(record) {
   }));
 }
 
+function questionForAnswer(messages, answerIndex) {
+  for (let index = answerIndex - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "user") {
+      return messages[index].text;
+    }
+  }
+  return "";
+}
+
+function reportExchangesFromMessages(messages) {
+  let latestQuestion = "";
+  const exchanges = [];
+
+  messages.forEach((message) => {
+    if (message.role === "user") {
+      latestQuestion = message.text;
+      return;
+    }
+    if (message.role === "assistant") {
+      exchanges.push({
+        question: latestQuestion,
+        answer: message.text,
+        citations: message.citations ?? [],
+      });
+    }
+  });
+
+  return exchanges;
+}
+
 /** One attached file, from the moment it is picked to the moment it is read.
  *
  * The chip appears the instant a file is chosen, showing a spinner in place of
@@ -588,6 +618,8 @@ function ChatThread({
   conversationId,
   onRetry,
 }) {
+  const conversationExchanges = reportExchangesFromMessages(messages);
+
   return (
     <div className="chat-body">
       <div className="chat-content">
@@ -687,7 +719,10 @@ function ChatThread({
 
                 {message.role === "assistant" && !message.needsClarification ? (
                   <MessageActions
+                    question={questionForAnswer(messages, index)}
                     answer={message.text}
+                    citations={message.citations ?? []}
+                    conversationExchanges={conversationExchanges}
                     conversationId={conversationId}
                     canRetry={!isLoading}
                     onRetry={() => onRetry(index)}

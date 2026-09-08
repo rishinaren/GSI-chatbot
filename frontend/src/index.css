@@ -3144,6 +3144,7 @@ input {
 
 /* ---------- What you can do with an answer ---------- */
 .msg-actions-wrap {
+  position: relative;
   margin-top: 8px;
 }
 
@@ -3183,6 +3184,142 @@ input {
 
 .msg-action.on {
   color: var(--accent-hover);
+}
+
+.msg-report-action {
+  position: relative;
+  width: auto;
+  gap: 5px;
+  margin-left: 8px;
+  padding: 0 9px 0 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.msg-report-action::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  width: 1px;
+  height: 15px;
+  background: var(--border);
+}
+
+.msg-report-action.on {
+  background: var(--accent-soft);
+}
+
+.msg-action:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.report-scope-picker {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 7px);
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  width: min(510px, 100%);
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+  animation: report-picker-in 0.13s ease-out;
+}
+
+.report-scope-option {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.report-scope-option:hover:not(:disabled),
+.report-scope-option:focus-visible {
+  background: var(--surface-hover);
+}
+
+.report-scope-option:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.report-scope-option:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.report-scope-icon {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
+.report-scope-option > span:last-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.report-scope-option strong {
+  overflow: hidden;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-scope-option small {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.65rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes report-picker-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (hover: none) {
+  .msg-actions {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 520px) {
+  .report-scope-picker {
+    grid-template-columns: 1fr;
+  }
 }
 
 .feedback-box {
