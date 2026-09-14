@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from typing import Iterable
 
+from standards_rag.design_guidance import DESIGN_GUIDANCE_NAMESPACE
 from standards_rag.models import SourceChunk, StandardDocument
 from standards_rag.retrieval import (
     InMemoryStandardsStore,
@@ -18,6 +20,7 @@ from standards_rag.retrieval import (
 _DEFAULT_EMBED_MODEL = "llama-text-embed-v2"
 # Max inputs per inference.embed() request for llama-text-embed-v2.
 _EMBED_INPUT_LIMIT = 96
+_EMBED_TOKEN_BUDGET_PER_MINUTE = 180_000
 # Isolated namespace for video-transcript vectors so they never pollute standards
 # chunk retrieval (which uses the default namespace).
 VIDEO_NAMESPACE = "videos"
@@ -71,10 +74,16 @@ def pinecone_enabled_from_env() -> bool:
     return bool(config.api_key and config.index_name)
 
 
-def attach_pinecone_index(store: InMemoryStandardsStore) -> PineconeHybridStore:
+def attach_pinecone_index(
+    store: InMemoryStandardsStore,
+    *,
+    namespace_override: str | None = None,
+) -> PineconeHybridStore:
     """Wrap an existing in-memory store with Pinecone upsert/query behavior."""
 
     config = load_pinecone_config_from_env()
+    if namespace_override is not None:
+        config = replace(config, namespace=namespace_override)
     if not config.api_key or not config.index_name:
         raise RuntimeError("Set PINECONE_API_KEY and PINECONE_INDEX to use Pinecone retrieval.")
 
@@ -85,6 +94,8 @@ def attach_pinecone_index(store: InMemoryStandardsStore) -> PineconeHybridStore:
     hybrid._pc = _require_pinecone()
     hybrid._client = hybrid._pc(api_key=config.api_key)
     hybrid._index = hybrid._connect_index(hybrid._client, config.index_name)
+    hybrid._embed_window_started = time.monotonic()
+    hybrid._estimated_embed_tokens = 0
 
     hybrid.documents = store.documents
     hybrid.chunks = store.chunks
@@ -102,6 +113,8 @@ class PineconeHybridStore(InMemoryStandardsStore):
         self._pc = _require_pinecone()
         self._client = self._pc(api_key=config.api_key)
         self._index = self._connect_index(self._client, config.index_name)
+        self._embed_window_started = time.monotonic()
+        self._estimated_embed_tokens = 0
 
     def upsert_embeddings(self, chunks: Iterable[SourceChunk]) -> None:
         chunk_list = list(chunks)
@@ -123,6 +136,13 @@ class PineconeHybridStore(InMemoryStandardsStore):
                 "heading": (chunk.heading or "")[:120],
                 "section_type": str(chunk.metadata.get("section_type", "other")),
                 "document_type": document.document_type.value,
+                "corpus_kind": document.metadata.get("corpus_kind", "standards"),
+                "authority": document.metadata.get("authority", "normative_or_published"),
+                "publication_year": document.year,
+                "edition": document.metadata.get("edition"),
+                "volume": document.metadata.get("volume"),
+                "chapter": chunk.metadata.get("chapter"),
+                "printed_page": chunk.metadata.get("printed_page_label"),
             }
             metadata = {key: value for key, value in metadata.items() if value is not None}
             vectors.append({"id": chunk.chunk_id, "values": values, "metadata": metadata})
@@ -167,6 +187,7 @@ class PineconeHybridStore(InMemoryStandardsStore):
         return {
             "total": int(data.get("total_vector_count") or 0),
             "standards": count(*default_keys),
+            "design_guidance": count(DESIGN_GUIDANCE_NAMESPACE),
             "videos": count(VIDEO_NAMESPACE),
         }
 
@@ -277,12 +298,39 @@ class PineconeHybridStore(InMemoryStandardsStore):
         # llama-text-embed-v2 caps inputs at 96 per request, so embed in batches.
         vectors: list[list[float]] = []
         for start in range(0, len(texts), _EMBED_INPUT_LIMIT):
-            response = self._client.inference.embed(
-                model=self.config.embed_model,
-                inputs=texts[start : start + _EMBED_INPUT_LIMIT],
-                parameters=_embed_parameters("passage"),
-            )
+            batch = texts[start : start + _EMBED_INPUT_LIMIT]
+            estimated_batch_tokens = max(sum(len(text) for text in batch) // 4, 1)
+            elapsed = time.monotonic() - self._embed_window_started
+            if elapsed >= 60:
+                self._embed_window_started = time.monotonic()
+                self._estimated_embed_tokens = 0
+                elapsed = 0
+            if (
+                self._estimated_embed_tokens
+                and self._estimated_embed_tokens + estimated_batch_tokens
+                > _EMBED_TOKEN_BUDGET_PER_MINUTE
+            ):
+                _sleep_in_short_intervals(max(61 - elapsed, 0))
+                self._embed_window_started = time.monotonic()
+                self._estimated_embed_tokens = 0
+
+            response = None
+            for attempt in range(4):
+                try:
+                    response = self._client.inference.embed(
+                        model=self.config.embed_model,
+                        inputs=batch,
+                        parameters=_embed_parameters("passage"),
+                    )
+                    break
+                except Exception as exc:
+                    if not _is_rate_limit_error(exc) or attempt == 3:
+                        raise
+                    _sleep_in_short_intervals(30)
+            if response is None:  # pragma: no cover - loop either succeeds or raises
+                raise RuntimeError("Pinecone embedding returned no response.")
             vectors.extend(_extract_embedding_vectors(response))
+            self._estimated_embed_tokens += estimated_batch_tokens
         return vectors
 
     def _embed_query(self, text: str) -> list[float]:
@@ -348,6 +396,18 @@ def _extract_embedding_vectors(response: object) -> list[list[float]]:
 def _embed_parameters(input_type: str) -> dict[str, str]:
     truncate = os.getenv("PINECONE_EMBED_TRUNCATE", "END").strip() or "END"
     return {"input_type": input_type, "truncate": truncate}
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    return getattr(exc, "status", None) == 429 or "RESOURCE_EXHAUSTED" in str(exc)
+
+
+def _sleep_in_short_intervals(seconds: float) -> None:
+    remaining = max(seconds, 0)
+    while remaining > 0:
+        interval = min(remaining, 30)
+        time.sleep(interval)
+        remaining -= interval
 
 
 def _lexical_overlap_score(

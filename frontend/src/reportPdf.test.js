@@ -50,6 +50,19 @@ test("formats library and attachment citations without leaking attachment links"
     ),
     "[2] Your document, field-report.pdf, page 7",
   );
+  assert.equal(
+    formatReportCitation(
+      {
+        source_kind: "design_guidance",
+        standard_id: "DWG-6E-V2",
+        title: "Designing with Geosynthetics, 6th Edition, Volume 2",
+        section: "5.3",
+        page_start: 566,
+      },
+      2,
+    ),
+    "[3] Design guidance, Designing with Geosynthetics, 6th Edition, Volume 2, Section 5.3, page 566",
+  );
 });
 
 test("creates a PDF with Unicode technical notation", async () => {

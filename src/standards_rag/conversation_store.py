@@ -87,10 +87,15 @@ class ConversationRecord:
 # single DynamoDB table (PK user_id, SK conversation_id) we store each project
 # as an item whose sort key is prefixed so it can be told apart from chats.
 PROJECT_SORT_KEY_PREFIX = "PROJECT#"
+PREFERENCES_SORT_KEY = "PROFILE#PREFERENCES"
 
 
 def _is_project_key(conversation_id: str) -> bool:
     return conversation_id.startswith(PROJECT_SORT_KEY_PREFIX)
+
+
+def _is_non_conversation_key(conversation_id: str) -> bool:
+    return _is_project_key(conversation_id) or conversation_id == PREFERENCES_SORT_KEY
 
 
 @dataclass
@@ -128,6 +133,40 @@ class ProjectRecord:
             project_id=str(data["project_id"]),
             user_id=str(data["user_id"]),
             name=str(data.get("name") or "Untitled project"),
+            created_at=str(data.get("created_at") or _utc_now_iso()),
+            updated_at=str(data.get("updated_at") or _utc_now_iso()),
+        )
+
+
+@dataclass
+class UserPreferences:
+    user_id: str
+    focus: str
+    created_at: str = field(default_factory=_utc_now_iso)
+    updated_at: str = field(default_factory=_utc_now_iso)
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {
+            "focus": self.focus,
+            "onboarding_complete": True,
+            "updated_at": self.updated_at,
+        }
+
+    def to_item(self) -> dict[str, object]:
+        return {
+            "user_id": self.user_id,
+            "conversation_id": PREFERENCES_SORT_KEY,
+            "record_type": "preferences",
+            "focus": self.focus,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_item(cls, data: dict[str, Any]) -> "UserPreferences":
+        return cls(
+            user_id=str(data["user_id"]),
+            focus=str(data.get("focus") or "testing"),
             created_at=str(data.get("created_at") or _utc_now_iso()),
             updated_at=str(data.get("updated_at") or _utc_now_iso()),
         )
@@ -200,11 +239,20 @@ class ConversationStore(ABC):
     def delete_project(self, user_id: str, project_id: str) -> bool:
         raise NotImplementedError
 
+    @abstractmethod
+    def get_user_preferences(self, user_id: str) -> UserPreferences | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_user_preferences(self, user_id: str, focus: str) -> UserPreferences:
+        raise NotImplementedError
+
 
 class InMemoryConversationStore(ConversationStore):
     def __init__(self) -> None:
         self._records: dict[tuple[str, str], ConversationRecord] = {}
         self._projects: dict[tuple[str, str], ProjectRecord] = {}
+        self._preferences: dict[str, UserPreferences] = {}
 
     def list_conversations(self, user_id: str, *, limit: int = 50) -> list[ConversationRecord]:
         rows = [record for (uid, _), record in self._records.items() if uid == user_id]
@@ -319,6 +367,19 @@ class InMemoryConversationStore(ConversationStore):
                     record.project_id = None
         return removed
 
+    def get_user_preferences(self, user_id: str) -> UserPreferences | None:
+        return self._preferences.get(user_id)
+
+    def set_user_preferences(self, user_id: str, focus: str) -> UserPreferences:
+        current = self._preferences.get(user_id)
+        if current is None:
+            current = UserPreferences(user_id=user_id, focus=focus)
+            self._preferences[user_id] = current
+        else:
+            current.focus = focus
+            current.updated_at = _utc_now_iso()
+        return current
+
 
 class DynamoDBConversationStore(ConversationStore):
     def __init__(self, *, table_name: str, region: str | None = None, ttl_days: int = 90) -> None:
@@ -343,12 +404,14 @@ class DynamoDBConversationStore(ConversationStore):
         records = [
             ConversationRecord.from_dict(item)
             for item in response.get("Items", [])
-            if not _is_project_key(str(item.get("conversation_id", "")))
+            if not _is_non_conversation_key(str(item.get("conversation_id", "")))
         ]
         records.sort(key=lambda item: (item.pinned, item.updated_at), reverse=True)
         return records[:limit]
 
     def get_conversation(self, user_id: str, conversation_id: str) -> ConversationRecord | None:
+        if _is_non_conversation_key(conversation_id):
+            return None
         response = self._table.get_item(Key={"user_id": user_id, "conversation_id": conversation_id})
         item = response.get("Item")
         return ConversationRecord.from_dict(item) if item else None
@@ -485,6 +548,23 @@ class DynamoDBConversationStore(ConversationStore):
             Key={"user_id": user_id, "conversation_id": self._project_sort_key(project_id)}
         )
         return True
+
+    def get_user_preferences(self, user_id: str) -> UserPreferences | None:
+        response = self._table.get_item(
+            Key={"user_id": user_id, "conversation_id": PREFERENCES_SORT_KEY}
+        )
+        item = response.get("Item")
+        return UserPreferences.from_item(item) if item else None
+
+    def set_user_preferences(self, user_id: str, focus: str) -> UserPreferences:
+        current = self.get_user_preferences(user_id)
+        if current is None:
+            current = UserPreferences(user_id=user_id, focus=focus)
+        else:
+            current.focus = focus
+            current.updated_at = _utc_now_iso()
+        self._table.put_item(Item=current.to_item())
+        return current
 
 
 def _title_from_question(question: str) -> str:

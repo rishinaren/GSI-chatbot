@@ -19,6 +19,12 @@ from standards_rag.attachments import (
 )
 from standards_rag.citation_validation import validate_answer_citations
 from standards_rag.conversation_store import ConversationStore
+from standards_rag.design_guidance import (
+    DESIGN_GUIDANCE_CORPUS,
+    design_query_with_context,
+    design_sections_for_question,
+    is_design_guidance_question,
+)
 from standards_rag.library import canonical_issuing_body
 from standards_rag.models import Citation, StandardDocument
 from standards_rag.retrieval import InMemoryStandardsStore, SearchResult, resolve_document_pdf_path
@@ -50,6 +56,20 @@ DOMAIN_ANCHOR_TERMS = {
     "stabilization",
     "liner",
     "drainage",
+    "design",
+    "reinforcement",
+    "geogrid",
+    "geonet",
+    "gcl",
+    "geofoam",
+    "geocomposite",
+    "filtration",
+    "separation",
+    "road",
+    "wall",
+    "slope",
+    "reservoir",
+    "landfill",
     "astm",
     "standard",
 }
@@ -100,6 +120,7 @@ class StandardsRagEngine:
         self,
         store: InMemoryStandardsStore,
         *,
+        design_store: InMemoryStandardsStore | None = None,
         top_k: int = 6,
         min_score: float = 0.005,
         answer_rewriter: Callable[[str, str, list[Citation]], str] | None = None,
@@ -108,6 +129,7 @@ class StandardsRagEngine:
         title_generator: Callable[[str, str], str] | None = None,
     ) -> None:
         self.store = store
+        self.design_store = design_store or InMemoryStandardsStore()
         self.top_k = top_k
         self.min_score = min_score
         self.answer_rewriter = answer_rewriter
@@ -124,9 +146,11 @@ class StandardsRagEngine:
         unit_preference: str | None = None,
         user_id: str | None = None,
         attachments: list[Attachment] | None = None,
+        retrieval_focus: str = "testing",
     ) -> ChatResponse:
         clean_question = question.strip()
         attached = list(attachments or [])
+        focus = retrieval_focus if retrieval_focus in {"testing", "design", "both"} else "testing"
         if user_id and self.conversation_store:
             self._hydrate_history_from_store(user_id, conversation_id)
         if not clean_question:
@@ -136,7 +160,7 @@ class StandardsRagEngine:
                 needs_clarification=True,
             )
 
-        if not self.store.chunks:
+        if not self.store.chunks and not self.design_store.chunks:
             return self._remember(
                 conversation_id,
                 clean_question,
@@ -153,6 +177,32 @@ class StandardsRagEngine:
                     follow_up_suggestions=[
                         "After ingesting, ask again using words that appear in the standard (designation, topic).",
                     ],
+                ),
+            )
+
+        if self.design_store.chunks and is_design_guidance_question(clean_question, focus):
+            design_response = self._answer_from_design_guidance(
+                clean_question,
+                focus=focus,
+                conversation_id=conversation_id,
+                unit_preference=unit_preference,
+                user_id=user_id,
+                attachments=attached,
+            )
+            if design_response is not None:
+                return design_response
+
+        if not self.store.chunks:
+            return self._remember(
+                conversation_id,
+                clean_question,
+                ChatResponse(
+                    answer=(
+                        "No standards are loaded in this instance. Choose Design in Chat "
+                        "preferences or ask specifically about the design books."
+                    ),
+                    citations=[],
+                    needs_clarification=True,
                 ),
             )
 
@@ -297,6 +347,150 @@ class StandardsRagEngine:
             attachments=attached,
         )
 
+    def _answer_from_design_guidance(
+        self,
+        question: str,
+        *,
+        focus: str,
+        conversation_id: str,
+        unit_preference: str | None,
+        user_id: str | None,
+        attachments: list[Attachment],
+    ) -> ChatResponse | None:
+        history = self._history.get(conversation_id, [])
+        query = question
+        if history and _looks_like_follow_up(question):
+            query = f"{history[-1].question}\nFollow-up: {question}"
+
+        design_query, preferred_chapters = design_query_with_context(query)
+        preferred_sections = design_sections_for_question(query)
+        guidance_results = self.design_store.search(
+            design_query,
+            top_k=max(self.top_k * 4, 24),
+            min_score=0.003,
+        )
+        if not guidance_results:
+            return None
+
+        if preferred_chapters:
+            guidance_results.sort(
+                key=lambda result: (
+                    any(
+                        (result.chunk.section or "").startswith(section)
+                        for section in preferred_sections
+                    )
+                    if preferred_sections
+                    else True,
+                    result.chunk.metadata.get("chapter") in preferred_chapters,
+                    _prose_quality(result.chunk.text),
+                    result.score,
+                ),
+                reverse=True,
+            )
+
+        standards_results: list[SearchResult] = []
+        if focus == "both":
+            standards_results = self._standards_for_design_question(query)
+
+        selected_guidance: list[SearchResult] = []
+        seen_pages: set[tuple[str, int | None]] = set()
+        for result in guidance_results:
+            page_key = (result.document.document_id, result.chunk.page_start)
+            if page_key in seen_pages:
+                continue
+            seen_pages.add(page_key)
+            selected_guidance.append(result)
+            if len(selected_guidance) == 3:
+                break
+        cited_results = [*standards_results, *selected_guidance]
+        citations = _citations_from_results(cited_results)
+        marker = 1
+        sections: list[str] = []
+
+        if standards_results:
+            lines = []
+            for result in standards_results:
+                lines.append(f"- {_evidence_sentence(result)} [{marker}]")
+                marker += 1
+            sections.append("Current standards evidence:\n" + "\n".join(lines))
+
+        guidance_lines = []
+        for result in selected_guidance:
+            location = f", section {result.chunk.section}" if result.chunk.section else ""
+            guidance_lines.append(
+                f"- {result.document.title}{location}: {_evidence_sentence(result)} [{marker}]"
+            )
+            marker += 1
+        sections.append("Design guidance from the 2012 books:\n" + "\n".join(guidance_lines))
+
+        response = ChatResponse(
+            answer="\n\n".join(sections),
+            citations=citations,
+            follow_up_suggestions=[
+                "Ask for the worked example behind this design approach.",
+                "Ask which current standard supplies the required test property.",
+            ],
+        )
+        response = self._add_attachment_evidence(question, response, attachments)
+        response = self._maybe_rewrite_answer(question, response, attachments)
+        response = self._verify_citations_in_answer(response)
+        response = self._attach_videos(question, response)
+        return self._remember(
+            conversation_id,
+            question,
+            response,
+            user_id=user_id,
+            unit_preference=unit_preference,
+            attachments=attachments,
+        )
+
+    def _standards_for_design_question(self, query: str) -> list[SearchResult]:
+        mentioned_ids = _document_ids_for_explicit_standard(query, self.store.documents)
+        if mentioned_ids:
+            return self.store.search(
+                query,
+                top_k=1,
+                document_ids=mentioned_ids,
+                min_score=0.003,
+            )
+
+        candidates = self.store.search(
+            query,
+            top_k=max(self.top_k * 4, 24),
+            min_score=0.003,
+        )
+        generic = {
+            "about",
+            "design",
+            "designing",
+            "evaluate",
+            "geosynthetic",
+            "geotextile",
+            "geomembrane",
+            "liner",
+            "should",
+            "using",
+        }
+        significant_terms = {
+            term
+            for term in re.findall(r"[a-z]{4,}", query.lower())
+            if term not in generic
+        }
+        best_by_document: dict[str, tuple[int, SearchResult]] = {}
+        for result in candidates:
+            title = result.document.title.lower()
+            overlap = sum(term in title for term in significant_terms)
+            current = best_by_document.get(result.document.document_id)
+            if current is None or (overlap, result.score) > (current[0], current[1].score):
+                best_by_document[result.document.document_id] = (overlap, result)
+
+        ranked = sorted(
+            best_by_document.values(),
+            key=lambda item: (item[0], item[1].score),
+            reverse=True,
+        )
+        return [ranked[0][1]] if ranked and ranked[0][0] > 0 else []
+
     def _search_with_relaxation(
         self, query: str, document_ids: set[str] | None
     ) -> list[SearchResult]:
@@ -421,9 +615,9 @@ class StandardsRagEngine:
         if response.answer.startswith("There are multiple context-dependent meanings/usages"):
             return response
 
-        answer, citations = validate_answer_citations(
-            response.answer, response.citations, self.store.chunks
-        )
+        chunks = dict(self.store.chunks)
+        chunks.update(self.design_store.chunks)
+        answer, citations = validate_answer_citations(response.answer, response.citations, chunks)
         return replace(response, answer=answer, citations=citations)
 
     def _maybe_rewrite_answer(
@@ -1012,9 +1206,11 @@ class StandardsRagEngine:
 
         target_bodies = _detect_body_targeting(question, prior_bodies, all_bodies)
         body_ids = _document_ids_for_bodies(target_bodies, documents)
+        mentioned_ids = _document_ids_for_explicit_standard(question, documents)
+        initial_scope = _merge_document_filters(body_ids, mentioned_ids)
 
         if not history or SPECIFIC_STANDARD_RE.search(question):
-            return question, body_ids
+            return question, initial_scope
 
         if not _looks_like_follow_up(question):
             return question, body_ids
@@ -1274,6 +1470,11 @@ def _citations_from_results(results: list[SearchResult] | tuple[SearchResult, ..
                 quote=_evidence_sentence(result, max_chars=240),
                 pdf_url=_document_pdf_url(result.document),
                 source_url=_document_source_url(result.document),
+                source_kind=(
+                    "design_guidance"
+                    if result.document.metadata.get("corpus_kind") == DESIGN_GUIDANCE_CORPUS
+                    else "library"
+                ),
             )
         )
     return citations
@@ -1289,10 +1490,12 @@ def _evidence_sentence(result: SearchResult, *, max_chars: int = 360) -> str:
         not in {"standard", "method", "practice", "loaded"}
     }
     best = ""
-    best_score = 0
+    best_score = -1
     for sentence in sentences:
         lowered = sentence.lower()
         score = sum(1 for term in preferred_terms if term in lowered)
+        if sentence.rstrip().endswith("?"):
+            score -= 2
         if score > best_score:
             best = sentence.strip()
             best_score = score
@@ -1394,6 +1597,8 @@ def _document_source_url(document: StandardDocument) -> str | None:
     ``compass.astm.org/content-search/?content=D5721``). Anything else falls back
     to the inline PDF (``source_url`` is None).
     """
+    if document.metadata.get("corpus_kind") == DESIGN_GUIDANCE_CORPUS:
+        return None
     body = (document.issuing_body or "").upper()
     if body == "GRI":
         return "https://geosynthetic-institute.org/member.html"
@@ -2092,6 +2297,25 @@ def _document_ids_for_bodies(
         return None
     ids = {doc.document_id for doc in documents.values() if _document_body(doc) in bodies}
     return ids or None
+
+
+def _document_ids_for_explicit_standard(
+    question: str, documents: dict[str, StandardDocument]
+) -> set[str] | None:
+    compact_question = re.sub(r"[^a-z0-9]", "", question.lower())
+    matches: set[str] = set()
+    for document in documents.values():
+        compact_id = re.sub(r"[^a-z0-9]", "", document.standard_id.lower())
+        if compact_id and compact_id in compact_question:
+            matches.add(document.document_id)
+    return matches or None
+
+
+def _prose_quality(text: str) -> int:
+    if not text:
+        return 0
+    letter_ratio = sum(character.isalpha() for character in text) / len(text)
+    return int(letter_ratio >= 0.6 and len(text) >= 100)
 
 
 def _focus_term(question: str) -> str:

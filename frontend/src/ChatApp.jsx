@@ -7,6 +7,7 @@ import "katex/dist/katex.min.css";
 import ChatSidebar from "./components/ChatSidebar";
 import AuthExperience from "./components/AuthExperience";
 import AdminPortal from "./components/AdminPortal";
+import ChatPreferencesModal from "./components/ChatPreferencesModal";
 import MessageActions from "./components/MessageActions";
 import {
   ApiError,
@@ -16,6 +17,7 @@ import {
   deleteConversation,
   deleteProject,
   getAdminConfig,
+  getChatPreferences,
   getConversation,
   listConversations,
   listProjects,
@@ -23,6 +25,7 @@ import {
   renameProject,
   sendChat,
   uploadChatAttachment,
+  updateChatPreferences,
   withAuthedFileUrl,
 } from "./api";
 import { clearSession, getUserEmail, isAuthenticated, signOut } from "./auth";
@@ -186,6 +189,9 @@ function ChatApp() {
   const [canManageLibrary, setCanManageLibrary] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [attachments, setAttachments] = useState([]);
+  const [chatFocus, setChatFocus] = useState("");
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   // Nothing may be sent while a file is still being read - the answer would be
   // written without the document the question is about.
@@ -207,7 +213,7 @@ function ChatApp() {
       return;
     }
     try {
-      await refreshSidebar();
+      await Promise.all([refreshSidebar(), refreshPreferences()]);
       void refreshAdminAccess();
       setAuthed(true);
     } catch (refreshError) {
@@ -236,6 +242,12 @@ function ChatApp() {
     await Promise.all([refreshConversations(), refreshProjects()]);
   }
 
+  async function refreshPreferences() {
+    const data = await getChatPreferences();
+    setChatFocus(data.focus || "");
+    setPreferencesReady(true);
+  }
+
   // The library entry point only appears for accounts on the admin allowlist;
   // the API enforces the same rule on every library call.
   async function refreshAdminAccess() {
@@ -252,10 +264,17 @@ function ChatApp() {
     setAuthed(true);
     void refreshAdminAccess();
     try {
-      await refreshSidebar();
+      await Promise.all([refreshSidebar(), refreshPreferences()]);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : "Failed to load your chats.");
     }
+  }
+
+  async function saveChatFocus(focus) {
+    const saved = await updateChatPreferences(focus);
+    setChatFocus(saved.focus);
+    setPreferencesReady(true);
+    setPreferencesOpen(false);
   }
 
   function startNewChat() {
@@ -544,6 +563,7 @@ function ChatApp() {
         canSignOut={authed}
         canManageLibrary={authed && canManageLibrary}
         onOpenLibrary={() => setAdminOpen(true)}
+        onOpenSettings={() => setPreferencesOpen(true)}
         onSignOut={() => {
           signOut();
           window.location.reload();
@@ -555,7 +575,7 @@ function ChatApp() {
           <div className="chat-header-inner">
             <div className="chat-header-titles">
               <h1>GSI Chatbot</h1>
-              <p className="chat-header-sub">Standards Q&amp;A — grounded in your ASTM, ISO, and GRI index</p>
+              <p className="chat-header-sub">Standards and design guidance for geosynthetics</p>
             </div>
           </div>
           <div className="header-right">
@@ -589,6 +609,14 @@ function ChatApp() {
       </div>
 
       {showAuthModal ? <AuthExperience onSignedIn={handleSignedIn} connectionError={error} /> : null}
+      {authed && preferencesReady && (!chatFocus || preferencesOpen) ? (
+        <ChatPreferencesModal
+          initialFocus={chatFocus}
+          onboarding={!chatFocus}
+          onSave={saveChatFocus}
+          onClose={() => setPreferencesOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -599,7 +627,7 @@ function EmptyState({ error, composerProps }) {
       <div className="empty-inner">
         <h2 className="empty-title">Ready when you are.</h2>
         <p className="empty-sub">
-          Ask about an ASTM or ISO standard, a test method, or request a video walkthrough.
+          Ask about a standard, a test method, or a geosynthetic design problem.
         </p>
         {error ? <div className="composer-error centered">{error}</div> : null}
         <Composer {...composerProps} variant="hero" />
@@ -681,9 +709,16 @@ function ChatThread({
                         // library, so it is labelled as theirs and never linked -
                         // the file was read for the question and not kept.
                         const attached = citation.source_kind === "attachment";
+                        const designGuidance = citation.source_kind === "design_guidance";
                         const docLine = attached ? (
                           <>
                             <strong>Your document</strong>
+                            {", "}
+                            {citation.title}
+                          </>
+                        ) : designGuidance ? (
+                          <>
+                            <strong>Design guidance</strong>
                             {", "}
                             {citation.title}
                           </>

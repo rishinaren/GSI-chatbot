@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from standards_rag.auth import auth_public_config, load_auth_config_from_env
-from standards_rag.conversation_store import InMemoryConversationStore
+from standards_rag.conversation_store import InMemoryConversationStore, UserPreferences
 from standards_rag.ingestion import chunk_pages, load_document_from_text
 from standards_rag.retrieval import InMemoryStandardsStore, rerank_results_for_citation
 
@@ -43,6 +43,25 @@ class ConversationStoreTests(unittest.TestCase):
         listed = store.list_conversations("user-1")
         self.assertEqual(len(listed), 1)
         self.assertEqual(listed[0].title, "What does D4595 cover?")
+
+    def test_user_preferences_are_persisted_separately_from_conversations(self) -> None:
+        store = InMemoryConversationStore()
+        self.assertIsNone(store.get_user_preferences("user-1"))
+
+        saved = store.set_user_preferences("user-1", "design")
+        self.assertEqual(saved.focus, "design")
+        self.assertEqual(store.list_conversations("user-1"), [])
+
+        updated = store.set_user_preferences("user-1", "both")
+        self.assertEqual(updated.focus, "both")
+        self.assertEqual(store.get_user_preferences("user-1").focus, "both")
+
+    def test_user_preferences_round_trip_as_a_non_conversation_item(self) -> None:
+        original = UserPreferences(user_id="user-1", focus="design")
+        restored = UserPreferences.from_item(original.to_item())
+        self.assertEqual(restored.user_id, "user-1")
+        self.assertEqual(restored.focus, "design")
+        self.assertTrue(restored.to_public_dict()["onboarding_complete"])
 
 
 class IngestionMetadataTests(unittest.TestCase):

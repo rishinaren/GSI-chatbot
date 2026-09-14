@@ -92,6 +92,9 @@ def build_openai_answer_rewriter_from_env() -> "Callable[..., str] | None":
         system = build_rewriter_system_prompt(
             include_comparison_schema=is_comparison_question(question),
             attachment_names=attachments,
+            include_design_guidance=any(
+                citation.source_kind == "design_guidance" for citation in citations
+            ),
         )
 
         user = (

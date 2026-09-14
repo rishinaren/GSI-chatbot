@@ -78,9 +78,12 @@ export function markdownToReportText(markdown) {
 
 export function formatReportCitation(citation, index) {
   const attached = citation?.source_kind === "attachment";
+  const designGuidance = citation?.source_kind === "design_guidance";
   const source = attached
     ? "Your document"
-    : citation?.standard_id || citation?.title || `Source ${index + 1}`;
+    : designGuidance
+      ? "Design guidance"
+      : citation?.standard_id || citation?.title || `Source ${index + 1}`;
   const details = [];
 
   if (citation?.title && citation.title !== source) {

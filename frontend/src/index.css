@@ -33,6 +33,18 @@
   box-sizing: border-box;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 html,
 body,
 #root {
@@ -564,6 +576,262 @@ input {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.sidebar-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.sidebar-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sidebar-settings-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- Chat focus onboarding and settings ---------- */
+.preference-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: clamp(24px, 7vh, 80px) 20px;
+  background: rgba(10, 10, 12, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.preference-card {
+  position: relative;
+  width: min(510px, 100%);
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55);
+}
+
+.preference-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.preference-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.preference-close svg,
+.preference-selected svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.preference-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 19px;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.preference-eyebrow {
+  margin: 0 0 5px;
+  color: var(--accent-hover);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.preference-card h1 {
+  margin: 0 40px 7px 0;
+  font-size: 1.45rem;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.preference-subtitle {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.preference-options {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.preference-option {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 550;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.preference-option:hover {
+  background: var(--surface-hover);
+}
+
+.preference-option.selected {
+  border-color: rgba(138, 160, 110, 0.66);
+  background: var(--accent-soft);
+}
+
+.preference-option-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--accent-hover);
+}
+
+.preference-option-icon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.preference-option input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.preference-selected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 13px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.preference-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
+.preference-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.preference-cancel,
+.preference-save {
+  border-radius: 999px;
+  padding: 9px 15px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.preference-cancel {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.preference-cancel:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.preference-save {
+  border: 0;
+  background: var(--accent);
+  color: #15200d;
+  font-weight: 600;
+}
+
+.preference-save:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.preference-save:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+@media (max-width: 520px) {
+  .preference-overlay {
+    padding: 16px 12px;
+  }
+
+  .preference-card {
+    padding: 23px 18px 20px;
+  }
+
+  .preference-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .preference-actions button {
+    width: 100%;
+    min-height: 44px;
+  }
 }
 
 /* ---------- Hover menu (popover) ---------- */

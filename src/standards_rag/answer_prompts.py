@@ -26,7 +26,7 @@ When citing with [n]:
 """
 
 REWRITER_GROUNDING = """
-You are turning retrieved standard excerpts into a clear, explanatory answer for an engineer.
+You are turning retrieved source excerpts into a clear, explanatory answer for an engineer.
 - Explain what the cited evidence means in plain, well-structured prose. Paraphrase and synthesize;
   do NOT copy the excerpt sentences verbatim and do NOT just list raw quotes.
 - Lead with a direct, helpful answer to the question, then expand with the supporting detail.
@@ -36,6 +36,18 @@ You are turning retrieved standard excerpts into a clear, explanatory answer for
   draft. Keep a marker on every sentence that states a sourced fact so citations stay traceable.
 - Prefer short paragraphs or tight bullet points over a wall of text.
 - If the evidence only partially answers the question, say plainly what the excerpts do and do not establish.
+"""
+
+DESIGN_GUIDANCE_RULES = """
+Some citations have `source_kind: design_guidance`. They come from Robert M. Koerner's
+Designing with Geosynthetics, 6th Edition (2012), not from a current standard.
+- Call this material "design guidance" or name the book. Never call it a requirement,
+  standard, code, or current specification.
+- Do not use "shall", "must", or "required" for a claim supported only by design guidance.
+- When both source kinds are present, distinguish current standards evidence from design
+  guidance. A standard controls if the sources differ.
+- Preserve worked equations, factors of safety, assumptions, and application limits only
+  when the cited excerpt supports them.
 """
 
 COMPARISON_ANSWER_SCHEMA = """
@@ -125,8 +137,8 @@ def is_comparison_question(question: str) -> bool:
 
 ATTACHED_DOCUMENT_RULES = """
 The user attached their own document to this question ({names}). Evidence whose citation
-metadata says `'source_kind': 'attachment'` comes from that upload; everything else is a
-published standard from the library.
+metadata says `'source_kind': 'attachment'` comes from that upload; other evidence is a
+published standard or clearly labeled design guidance from the library.
 - Keep the two apart in every sentence. Say "your document" (or its file name) for the
   upload and name the standard for library evidence. Never present the upload as though it
   were published literature, and never let it stand in for what a standard requires.
@@ -140,11 +152,19 @@ published standard from the library.
 
 
 def build_rewriter_system_prompt(
-    *, include_comparison_schema: bool, attachment_names: list[str] | None = None
+    *,
+    include_comparison_schema: bool,
+    attachment_names: list[str] | None = None,
+    include_design_guidance: bool = False,
 ) -> str:
+    source_description = (
+        "standards and non-normative engineering design guidance"
+        if include_design_guidance
+        else "standards documents"
+    )
     parts = [
-        "You are a knowledgeable technical assistant for geosynthetics standards.\n",
-        "The draft below is a list of raw excerpts retrieved from standards documents. "
+        "You are a knowledgeable technical assistant for geosynthetics.\n",
+        f"The draft below is a list of raw excerpts retrieved from {source_description}. "
         "Rewrite it into a clear, conversational explanation that an engineer can read and "
         "understand, as if you are teaching the concept.\n",
         "Explain what the retrieved evidence means in your own words; do NOT just repeat the "
@@ -157,6 +177,9 @@ def build_rewriter_system_prompt(
     ]
     if include_comparison_schema:
         parts.append(COMPARISON_ANSWER_SCHEMA.strip())
+        parts.append("\n\n")
+    if include_design_guidance:
+        parts.append(DESIGN_GUIDANCE_RULES.strip())
         parts.append("\n\n")
     if attachment_names:
         parts.append(ATTACHED_DOCUMENT_RULES.format(names=", ".join(attachment_names)).strip())
@@ -175,8 +198,8 @@ def build_rewriter_system_prompt(
         "- If the draft says meanings/usages are context-dependent, keep that framing.\n"
         "- Keep per-context bullet points when they are present in the draft.\n"
         "- Name the issuing body of each standard you cite (for example 'ASTM D4595', "
-        "'GRI GM13', 'ISO 10319'). When the question targets a specific body or compares "
-        "bodies, make clear which body's standards each part of the answer draws on.\n"
+        "'GRI GM13', 'ISO 10319'). Label book evidence as design guidance instead. When "
+        "the question compares sources, make clear which source each part draws on.\n"
         "- Never mention the rewrite process (for example, do not say 'Here is a clearer version "
         "of your draft').\n"
     )

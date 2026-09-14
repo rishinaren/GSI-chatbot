@@ -240,6 +240,17 @@ export function listProjects() {
   return request("/projects");
 }
 
+export function getChatPreferences() {
+  return request("/preferences");
+}
+
+export function updateChatPreferences(focus) {
+  return request("/preferences", {
+    method: "PUT",
+    body: JSON.stringify({ focus }),
+  });
+}
+
 export function createProject(name) {
   return request("/projects", {
     method: "POST",

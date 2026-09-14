@@ -265,6 +265,14 @@ class StandardsRagTests(unittest.TestCase):
         self.assertIn("verbatim", prompt.lower())
         self.assertIn("explain", prompt.lower())
 
+    def test_rewriter_prompt_separates_design_guidance_authority(self) -> None:
+        prompt = build_rewriter_system_prompt(
+            include_comparison_schema=False,
+            include_design_guidance=True,
+        )
+        self.assertIn("non-normative", prompt)
+        self.assertIn("A standard controls", prompt)
+
     def test_follow_up_uses_conversation_context_and_converts_units(self) -> None:
         self.engine.ask("What does D7762-18 say about fly ash stabilization?", conversation_id="demo")
         response = self.engine.ask(

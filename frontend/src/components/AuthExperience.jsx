@@ -20,7 +20,7 @@ const FALLBACK_PLAN = {
   trial_days: 30,
   monthly_equivalent: 100,
   features: [
-    "Unlimited standards Q&A grounded in ASTM, ISO & GRI",
+    "Standards testing and geosynthetics design guidance",
     "Page-bound citations with source links",
     "Video walkthroughs surfaced inline",
     "Saved chats and projects",
@@ -239,7 +239,7 @@ export default function AuthExperience({ onSignedIn, connectionError = "" }) {
           <div className="auth-choose">
             <h1>Welcome to the GSI Chatbot</h1>
             <p className="auth-subtitle">
-              The standards research assistant for geosynthetics — grounded in ASTM, ISO &amp; GRI.
+              Geosynthetics standards testing and design guidance in one assistant.
             </p>
             <div className="auth-options">
               <button type="button" className="auth-option" onClick={() => goto("member")}>

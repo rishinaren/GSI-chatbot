@@ -22,6 +22,7 @@ from standards_rag.auth import (
 from standards_rag.chat import StandardsRagEngine
 from standards_rag.conversation_store import build_conversation_store_from_env
 from standards_rag.env_bootstrap import (
+    default_design_guidance_index_path,
     default_standards_index_path,
     load_dotenv_files,
     sync_runtime_assets_from_s3,
@@ -83,7 +84,10 @@ def _allowed_origins() -> list[str]:
     return defaults + [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-def create_app(store: InMemoryStandardsStore | None = None) -> Any:
+def create_app(
+    store: InMemoryStandardsStore | None = None,
+    design_store: InMemoryStandardsStore | None = None,
+) -> Any:
     try:
         from fastapi import FastAPI, File, Form, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
@@ -91,6 +95,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
     except ImportError as exc:
         raise RuntimeError("Install the optional 'api' dependencies to serve the API.") from exc
 
+    configure_remote_retrieval = store is None
     if store is None:
         try:
             downloaded = sync_runtime_assets_from_s3()
@@ -109,8 +114,27 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
                 "Ingest documents or set STANDARDS_INDEX_PATH in .env",
                 index_path,
             )
-        if pinecone_enabled_from_env():
-            store = attach_pinecone_index(store)
+    if design_store is None:
+        design_index_path = default_design_guidance_index_path()
+        if design_index_path.exists():
+            design_store = InMemoryStandardsStore.load_json(design_index_path)
+            logger.info(
+                "Loaded design-guidance index from %s (%d documents)",
+                design_index_path,
+                len(design_store.documents),
+            )
+        else:
+            design_store = InMemoryStandardsStore()
+            logger.info("No design-guidance index at %s", design_index_path)
+
+    if configure_remote_retrieval and pinecone_enabled_from_env():
+        from standards_rag.design_guidance import DESIGN_GUIDANCE_NAMESPACE
+
+        store = attach_pinecone_index(store)
+        design_store = attach_pinecone_index(
+            design_store,
+            namespace_override=DESIGN_GUIDANCE_NAMESPACE,
+        )
 
     try:
         answer_rewriter = build_openai_answer_rewriter_from_env()
@@ -156,6 +180,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
     feedback_log = build_feedback_log_from_env(conversation_store)
     engine = StandardsRagEngine(
         store,
+        design_store=design_store,
         answer_rewriter=answer_rewriter,
         conversation_store=conversation_store,
         video_store=video_store,
@@ -190,6 +215,8 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             "ok": True,
             "documents": len(store.documents),
             "chunks": len(store.chunks),
+            "design_documents": len(design_store.documents),
+            "design_chunks": len(design_store.chunks),
             "videos": len(video_store),
             "answer_rewriter_active": answer_rewriter is not None,
             "title_generator_active": title_generator is not None,
@@ -350,6 +377,25 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
                 for record in records
             ]
         }
+
+    @app.get("/preferences")
+    def get_preferences(request: FastAPIRequest) -> dict[str, object]:
+        user = effective_user(request)
+        preferences = conversation_store.get_user_preferences(user.user_id)
+        if preferences is None:
+            return {"focus": None, "onboarding_complete": False}
+        return preferences.to_public_dict()
+
+    @app.put("/preferences")
+    def update_preferences(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
+        user = effective_user(request)
+        focus = str(payload.get("focus") or "").strip().lower()
+        if focus not in {"testing", "design", "both"}:
+            raise HTTPException(
+                status_code=400,
+                detail="focus must be testing, design, or both",
+            )
+        return conversation_store.set_user_preferences(user.user_id, focus).to_public_dict()
 
     @app.post("/conversations")
     def create_conversation(
@@ -640,6 +686,13 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
     def chat(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
         question = str(payload.get("question", "")).strip()
         user = effective_user(request)
+        saved_preferences = conversation_store.get_user_preferences(user.user_id)
+        requested_focus = str(payload.get("focus") or "").strip().lower()
+        if requested_focus and requested_focus not in {"testing", "design", "both"}:
+            raise HTTPException(status_code=400, detail="invalid focus")
+        retrieval_focus = requested_focus or (
+            saved_preferences.focus if saved_preferences is not None else "testing"
+        )
 
         raw_ids = payload.get("attachment_ids")
         attachments = []
@@ -664,6 +717,7 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
             unit_preference=payload.get("unit_preference"),
             user_id=user.user_id,
             attachments=attachments,
+            retrieval_focus=retrieval_focus,
         )
         return response.to_dict()
 
@@ -714,7 +768,10 @@ def create_app(store: InMemoryStandardsStore | None = None) -> Any:
         if user is None and auth_config.required and auth_config.enabled:
             raise HTTPException(status_code=401, detail="Authentication required.")
 
-        doc = store.documents.get(unquote(document_id))
+        decoded_document_id = unquote(document_id)
+        doc = store.documents.get(decoded_document_id) or design_store.documents.get(
+            decoded_document_id
+        )
         if doc is None:
             raise HTTPException(status_code=404, detail="document not found")
         path = resolve_document_pdf_path(doc)

@@ -15,6 +15,7 @@ class DocumentType(StrEnum):
     PRACTICE = "practice"
     TEST_METHOD = "test_method"
     SPECIFICATION = "specification"
+    BOOK = "book"
     OTHER = "other"
 
 
@@ -104,9 +105,9 @@ class Citation:
     quote: str | None = None
     pdf_url: str | None = None
     source_url: str | None = None
-    # "library" = a standard we hold; "attachment" = a document the asker brought
-    # with their question. The distinction has to survive to the UI, which must
-    # never present someone's own upload as though it were published literature.
+    # "library" = a standard we hold; "design_guidance" = non-normative books;
+    # "attachment" = a document the asker brought with their question. The
+    # distinction has to survive to the UI so their authority is never blurred.
     source_kind: str = "library"
 
     @property

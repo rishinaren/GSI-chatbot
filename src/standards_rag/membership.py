@@ -53,7 +53,7 @@ PLAN = {
     "trial_days": 30,
     "monthly_equivalent": 100,
     "features": [
-        "Unlimited standards Q&A grounded in ASTM, ISO & GRI",
+        "Standards testing and geosynthetics design guidance",
         "Page-bound citations with source links",
         "Video walkthroughs surfaced inline",
         "Saved chats and projects",

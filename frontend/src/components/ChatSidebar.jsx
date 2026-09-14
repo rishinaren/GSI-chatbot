@@ -81,6 +81,15 @@ function ChatBubbleIcon() {
   );
 }
 
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z" />
+    </svg>
+  );
+}
+
 function EnterHint() {
   return (
     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -122,6 +131,7 @@ export default function ChatSidebar({
   canSignOut,
   canManageLibrary,
   onOpenLibrary,
+  onOpenSettings,
 }) {
   const [activeTab, setActiveTab] = useState("chats");
   const [openProjectId, setOpenProjectId] = useState(null);
@@ -384,11 +394,17 @@ export default function ChatSidebar({
 
       <div className="sidebar-footer">
         {userEmail ? <span className="sidebar-user" title={userEmail}>{userEmail}</span> : <span />}
-        {canSignOut ? (
-          <button type="button" className="text-btn" onClick={onSignOut}>
-            Sign out
+        <div className="sidebar-footer-actions">
+          <button type="button" className="text-btn sidebar-settings-btn" onClick={onOpenSettings}>
+            <SettingsIcon />
+            Settings
           </button>
-        ) : null}
+          {canSignOut ? (
+            <button type="button" className="text-btn" onClick={onSignOut}>
+              Sign out
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {menu ? (

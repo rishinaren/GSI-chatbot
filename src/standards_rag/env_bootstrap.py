@@ -51,6 +51,15 @@ def default_standards_index_path() -> Path:
     return project_root() / path
 
 
+def default_design_guidance_index_path() -> Path:
+    """Resolve the isolated design-guidance JSON index used beside standards."""
+    raw = os.getenv("DESIGN_GUIDANCE_INDEX_PATH", "data/index/design-guidance.json").strip()
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    return project_root() / path
+
+
 def sync_runtime_assets_from_s3() -> int:
     """Sync index/PDF artifacts from S3 prefix into project root.
 
