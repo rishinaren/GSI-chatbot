@@ -372,13 +372,44 @@ def _infer_title(text: str, source_path: str | None, standard_id: str) -> str:
     for index, line in enumerate(lines[:30]):
         if "standard" in line.lower() and len(line) > 20:
             title_lines = [line]
-            for next_line in lines[index + 1 : index + 3]:
-                if len(next_line) > 12 and not SECTION_RE.match(next_line):
+            for next_line in lines[index + 1 : index + 8]:
+                lower = next_line.lower()
+                if (
+                    SECTION_RE.match(next_line)
+                    or lower.startswith("this standard is issued")
+                    or lower.startswith("this international standard")
+                    or lower.startswith("designation:")
+                ):
+                    break
+                if len(next_line) > 12:
                     title_lines.append(next_line)
-            return " ".join(title_lines)
+            return clean_document_title(" ".join(title_lines))
     if source_path:
         return Path(source_path).stem.replace("_", " ").replace("-", " ")
     return standard_id
+
+
+def clean_document_title(title: str) -> str:
+    """Remove ASTM cover-page boilerplate and attached footnote markers from a title."""
+    cleaned = re.split(
+        r"\s+This\s+(?:international\s+)?standard\s+(?:is\s+issued|was\s+developed)\b",
+        " ".join((title or "").split()),
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    return re.sub(r"(?<=[A-Za-z)])(?:1|¹)$", "", cleaned).strip(" .")
+
+
+def title_from_cover_text(text: str) -> str | None:
+    """Recover the complete ASTM title from a cover chunk, including wrapped lines."""
+    compact = " ".join((text or "").split())
+    match = re.search(
+        r"\b(Standard\s+(?:Test\s+Methods?|Practice|Specification|Guide)\s+for\s+.+?)"
+        r"\s+This\s+standard\s+is\s+issued\b",
+        compact,
+        re.IGNORECASE,
+    )
+    return clean_document_title(match.group(1)) if match else None
 
 
 def _infer_document_type(text: str, title: str) -> str:

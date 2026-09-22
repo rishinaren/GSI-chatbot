@@ -9,7 +9,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from standards_rag.answer_prompts import build_rewriter_system_prompt
 from standards_rag.chat import StandardsRagEngine
-from standards_rag.ingestion import infer_document_metadata, load_document_from_text
+from standards_rag.ingestion import (
+    infer_document_metadata,
+    load_document_from_text,
+    title_from_cover_text,
+)
 from standards_rag.models import DocumentType
 from standards_rag.retrieval import InMemoryStandardsStore
 
@@ -292,6 +296,62 @@ class StandardsRagTests(unittest.TestCase):
         self.assertTrue(response.unsupported)
         self.assertEqual(response.citations, [])
         self.assertIn("could not find support", response.answer)
+
+    def test_unloaded_explicit_standard_is_not_reconstructed_from_cross_references(self) -> None:
+        response = self.engine.ask("What does ASTM D9999 cover?")
+
+        self.assertTrue(response.unsupported)
+        self.assertEqual(response.citations, [])
+        self.assertIn("not present in the loaded library", response.answer)
+
+    def test_false_numeric_requirement_is_not_inferred_from_nearby_words(self) -> None:
+        response = self.engine.ask(
+            "Does D7762-18 require specimens compacted to 80 percent maximum dry density?"
+        )
+
+        self.assertTrue(response.unsupported)
+        self.assertEqual(response.citations, [])
+        self.assertIn("does not establish", response.answer)
+
+    def test_supported_numeric_requirement_still_answers(self) -> None:
+        response = self.engine.ask(
+            "Does D7762-18 require specimens compacted to 95 percent maximum dry density?"
+        )
+
+        self.assertFalse(response.unsupported)
+        self.assertIn("95", response.answer)
+
+    def test_cover_text_recovers_wrapped_title_without_boilerplate(self) -> None:
+        title = title_from_cover_text(
+            "Designation: D6766-25 Standard Test Method for Evaluation of Hydraulic "
+            "Properties of GCLs Permeated with Aqueous Solutions1 This standard is issued "
+            "under the fixed designation D6766."
+        )
+        self.assertEqual(
+            title,
+            "Standard Test Method for Evaluation of Hydraulic Properties of GCLs "
+            "Permeated with Aqueous Solutions",
+        )
+
+    def test_bare_designations_scope_comparison_to_the_named_documents(self) -> None:
+        response = self.engine.ask("Compare D5321 and D5887")
+
+        cited = {citation.standard_id for citation in response.citations}
+        self.assertTrue(any("D5321" in standard for standard in cited))
+        self.assertTrue(any("D5887" in standard for standard in cited))
+        self.assertTrue(all("D5321" in standard or "D5887" in standard for standard in cited))
+
+    def test_rewriter_with_wrong_standard_marker_falls_back_to_grounded_draft(self) -> None:
+        engine = StandardsRagEngine(
+            self.store,
+            answer_rewriter=lambda *_args, **_kwargs: (
+                "ASTM D5887 measures wide-width tensile strength [1]."
+            ),
+        )
+        response = engine.ask("What does D7762-18 cover?")
+
+        self.assertNotIn("D5887 measures wide-width", response.answer)
+        self.assertIn("self-cementing coal fly ash", response.answer)
 
     def test_index_round_trip_preserves_documents_and_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -7,7 +7,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import unittest
 
-from standards_rag.citation_validation import citation_supports_claim, validate_answer_citations
+from standards_rag.citation_validation import (
+    citation_supports_claim,
+    uncited_standard_claims,
+    validate_answer_citations,
+)
 from standards_rag.models import Citation, SourceChunk
 
 
@@ -34,6 +38,47 @@ class CitationValidationTests(unittest.TestCase):
             page_end=7,
         )
         claim = "- D5887 measures wide-width tensile strength of knitted geogrids [1]"
+        self.assertFalse(citation_supports_claim(claim, cit, chunk))
+
+    def test_rejects_marker_pointing_to_a_different_named_standard(self) -> None:
+        cit = _fake_citation(standard_id="D6768-20(2026)")
+        chunk = SourceChunk(
+            chunk_id=cit.chunk_id,
+            document_id="astm-d6768",
+            text="The tensile specimens are sampled across the GCL width.",
+            page_start=1,
+            page_end=1,
+        )
+        claim = "ASTM D4632 measures GCL tensile strength using specimens across the width [1]"
+        self.assertFalse(citation_supports_claim(claim, cit, chunk))
+
+    def test_bare_designation_matches_revised_citation(self) -> None:
+        cit = _fake_citation(standard_id="D5321-26")
+        chunk = SourceChunk(
+            chunk_id=cit.chunk_id,
+            document_id="astm-d5321",
+            text="The method determines direct shear resistance at soil-geosynthetic interfaces.",
+            page_start=1,
+            page_end=1,
+        )
+        self.assertTrue(
+            citation_supports_claim("ASTM D5321 determines interface shear resistance [1]", cit, chunk)
+        )
+
+    def test_finds_uncited_sentence_that_names_a_standard(self) -> None:
+        answer = "ASTM D4595 measures wide-width tensile properties.\n\nDetails follow [1]."
+        self.assertEqual(len(uncited_standard_claims(answer)), 1)
+
+    def test_negative_claim_needs_direct_support_not_source_absence(self) -> None:
+        cit = _fake_citation(standard_id="D5887-23")
+        chunk = SourceChunk(
+            chunk_id=cit.chunk_id,
+            document_id="astm-d5887",
+            text="This method measures index flux through a saturated GCL specimen.",
+            page_start=1,
+            page_end=1,
+        )
+        claim = "ASTM D5887 does not provide explicit guidance for field adjustment [1]"
         self.assertFalse(citation_supports_claim(claim, cit, chunk))
 
     def test_validate_strips_and_renumbers(self) -> None:

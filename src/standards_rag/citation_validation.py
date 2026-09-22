@@ -21,10 +21,51 @@ ANCHOR_STOP = frozenset(
 # Match citation marker preceded by whitespace (draft format: ... claim [n])
 CITE_MARKER = re.compile(r"(\s*)\[(\d{1,2})\](?!\d)")
 COMPACT_SID_RE = re.compile(r"[^a-z0-9]+")
+NEGATIVE_ASSERTION_RE = re.compile(
+    r"\b(?:does|do|is|are|can|may|will|shall)\s+not\b|"
+    r"\bno\s+(?:explicit\s+|direct\s+|specific\s+)?(?:requirement|guidance|value|method|support)\b",
+    re.IGNORECASE,
+)
+STANDARD_MENTION_RE = re.compile(
+    r"\b(?:ASTM\s*)?[A-Z]\d{2,5}(?:/[A-Z]?\d{2,5}[A-Z]?)?"
+    r"(?:[-–]\s*\d{2,4}[A-Z]?(?:\(\d{4}\))?)?\b|"
+    r"\bISO\s+\d+(?:[-:]\d+)*(?::\d{4})?\b|"
+    r"\bBS\s+(?:EN\s+)?\d+(?:[-:]\d+)*(?::\d{4})?\b|"
+    r"\b(?:GRI[-\s]*)?(?:GCL|GG|GM|GN|GC|GT|GS)\s*-?\s*\d+[A-Z]?\b",
+    re.IGNORECASE,
+)
 
 
 def _standard_id_compact(value: str) -> str:
     return COMPACT_SID_RE.sub("", value.lower())
+
+
+def _standard_lookup_keys(value: str) -> set[str]:
+    raw = (value or "").upper().strip()
+    raw = re.sub(r"^(?:ASTM|GRI)[-\s]*", "", raw)
+    compact = re.sub(r"[^A-Z0-9]", "", raw)
+    if not compact:
+        return set()
+    keys = {compact}
+    if compact.startswith("ISO"):
+        match = re.match(r"ISO(\d+)", compact)
+        return keys | ({f"ISO{match.group(1)}"} if match else set())
+    astm = re.match(r"([A-Z]\d{2,5})(?=/|[-–\s(]|$)", raw)
+    if astm:
+        keys.add(astm.group(1))
+    gri = re.match(r"((?:GCL|GG|GM|GN|GC|GT|GS)\d+)([A-Z]?)", compact)
+    if gri:
+        keys.add(gri.group(1))
+        if gri.group(2):
+            keys.add(gri.group(1) + gri.group(2))
+    return keys
+
+
+def _standard_mentions(value: str) -> set[str]:
+    keys: set[str] = set()
+    for match in STANDARD_MENTION_RE.finditer(value):
+        keys.update(_standard_lookup_keys(match.group(0)))
+    return keys
 
 
 def _claim_line_before_marker(answer: str, match_start: int) -> str:
@@ -71,6 +112,17 @@ def citation_supports_claim(claim: str, citation: Citation, chunk: SourceChunk |
     if not haystack.strip():
         return False
 
+    # Lexical overlap alone can make a claim about D4632 look supported by a D6768
+    # tensile passage. If the claim names a source, the marker must point to that source.
+    claim_standards = _standard_mentions(claim)
+    citation_standards = _standard_lookup_keys(citation.standard_id)
+    if (
+        citation.source_kind != "attachment"
+        and claim_standards
+        and not (claim_standards & citation_standards)
+    ):
+        return False
+
     tokens = _meaningful_claim_tokens(claim)
     sid_comp = _standard_id_compact(citation.standard_id)
     claim_comp = _standard_id_compact(claim)
@@ -84,9 +136,53 @@ def citation_supports_claim(claim: str, citation: Citation, chunk: SourceChunk |
         return hits >= len(tokens)
 
     need = max(2, (len(tokens) + 2) // 3)
-    if designation_in_claim:
+    negative_assertion = bool(NEGATIVE_ASSERTION_RE.search(claim))
+    if negative_assertion:
+        # Claims about what a source does *not* say are especially easy to invent from
+        # missing context. Demand substantially more direct lexical support.
+        need = max(need, (3 * len(tokens) + 4) // 5)
+    if designation_in_claim and not negative_assertion:
         need = max(1, need - 1)
     return hits >= min(need, len(tokens))
+
+
+def unsupported_citation_markers(
+    answer: str,
+    citations: list[Citation],
+    chunks: dict[str, SourceChunk],
+) -> list[int]:
+    """Citation indices whose marker is missing, out of range, or does not support its claim."""
+    invalid: list[int] = []
+    for marker in CITE_MARKER.finditer(answer):
+        index = int(marker.group(2))
+        if index < 1 or index > len(citations):
+            invalid.append(index)
+            continue
+        citation = citations[index - 1]
+        claim = _claim_line_before_marker(answer, marker.start())
+        if not citation_supports_claim(claim, citation, chunks.get(citation.chunk_id)):
+            invalid.append(index)
+    return invalid
+
+
+def uncited_standard_claims(answer: str) -> list[str]:
+    """Substantive paragraphs/bullets that name a standard but have no source marker."""
+    issues: list[str] = []
+    segments: list[str] = []
+    for block in re.split(r"\n\s*\n", answer):
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if any(line.startswith(("- ", "* ")) for line in lines):
+            segments.extend(lines)
+        elif lines:
+            segments.append(" ".join(lines))
+
+    for raw in segments:
+        paragraph = raw.strip().lstrip("#-* ").strip()
+        if not paragraph or paragraph.endswith(":") or CITE_MARKER.search(paragraph):
+            continue
+        if _standard_mentions(paragraph) and len(_meaningful_claim_tokens(paragraph)) >= 3:
+            issues.append(paragraph)
+    return issues
 
 
 def validate_answer_citations(
@@ -102,17 +198,7 @@ def validate_answer_citations(
     if not matches:
         return answer, citations
 
-    dropped: list[int] = []
-    for m in matches:
-        idx = int(m.group(2))
-        if idx < 1 or idx > len(citations):
-            dropped.append(idx)
-            continue
-        claim = _claim_line_before_marker(answer, m.start())
-        cit = citations[idx - 1]
-        chunk = chunks.get(cit.chunk_id)
-        if not citation_supports_claim(claim, cit, chunk):
-            dropped.append(idx)
+    dropped = unsupported_citation_markers(answer, citations, chunks)
 
     if not dropped:
         return answer, citations

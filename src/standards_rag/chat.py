@@ -17,7 +17,11 @@ from standards_rag.attachments import (
     retrieval_hint,
     select_passages,
 )
-from standards_rag.citation_validation import validate_answer_citations
+from standards_rag.citation_validation import (
+    uncited_standard_claims,
+    unsupported_citation_markers,
+    validate_answer_citations,
+)
 from standards_rag.conversation_store import ConversationStore
 from standards_rag.design_guidance import (
     DESIGN_GUIDANCE_CORPUS,
@@ -26,23 +30,32 @@ from standards_rag.design_guidance import (
     is_design_guidance_question,
 )
 from standards_rag.library import canonical_issuing_body
-from standards_rag.models import Citation, StandardDocument
-from standards_rag.retrieval import InMemoryStandardsStore, SearchResult, resolve_document_pdf_path
+from standards_rag.models import Citation, SourceChunk, StandardDocument
+from standards_rag.retrieval import (
+    InMemoryStandardsStore,
+    SearchResult,
+    _tokens,
+    resolve_document_pdf_path,
+)
 from standards_rag.units import convert_measurement, extract_measurements, format_conversion
 
 if TYPE_CHECKING:
     from standards_rag.video import VideoTranscriptStore
 
 SPECIFIC_STANDARD_RE = re.compile(
-    r"\b(?:ASTM\s*)?[A-Z]\d{2,5}(?:/[A-Z]\d{2,5})?-\d{2,4}[A-Z]?\b|"
+    r"\b(?:ASTM\s*)?[A-Z]\d{2,5}(?:/[A-Z]?\d{2,5}[A-Z]?)?"
+    r"(?:[-–]\s*\d{2,4}[A-Z]?(?:\(\d{4}\))?)?\b|"
     r"\bISO\s+\d+(?:[-:]\d+)*(?::\d{4})?\b|"
-    r"\bBS\s+(?:EN\s+)?\d+(?:[-:]\d+)*(?::\d{4})?\b",
+    r"\bBS\s+(?:EN\s+)?\d+(?:[-:]\d+)*(?::\d{4})?\b|"
+    r"\b(?:GRI[-\s]*)?(?:GCL|GG|GM|GN|GC|GT|GS)\s*-?\s*\d+[A-Z]?\b",
     re.IGNORECASE,
 )
 PARTIAL_SUPPORT_SCORE_THRESHOLD = 0.08
 DOMAIN_ANCHOR_TERMS = {
     "geotextile",
+    "geotextiles",
     "geosynthetic",
+    "geosynthetics",
     "geomembrane",
     "gcl",
     "soil",
@@ -248,6 +261,30 @@ class StandardsRagEngine:
                 unit_preference=unit_preference,
             )
 
+        if (
+            not attached
+            and SPECIFIC_STANDARD_RE.search(clean_question)
+            and _document_ids_for_explicit_standard(clean_question, self.store.documents) is None
+        ):
+            return self._remember(
+                conversation_id,
+                clean_question,
+                ChatResponse(
+                    answer=(
+                        "The standard designation in that question is not present in the loaded "
+                        "library. I should not reconstruct its requirements from references in "
+                        "other documents or from general knowledge."
+                    ),
+                    citations=[],
+                    unsupported=True,
+                    follow_up_suggestions=[
+                        "Check the designation and revision, or ask an administrator to add the standard."
+                    ],
+                ),
+                user_id=user_id,
+                unit_preference=unit_preference,
+            )
+
         query, scoped_document_ids = self._contextual_query(clean_question, conversation_id)
         # Search the library for what the attached document is about, not only for
         # what the question spells out - a spec that names GM13 should pull GM13.
@@ -300,6 +337,28 @@ class StandardsRagEngine:
                         "Paste the exact standard designation (e.g. D7762-18) into your question.",
                         "Ask what a specific loaded standard covers.",
                     ],
+                ),
+                user_id=user_id,
+                unit_preference=unit_preference,
+            )
+
+        if (
+            not attached
+            and SPECIFIC_STANDARD_RE.search(clean_question)
+            and _is_requirement_verification_question(clean_question)
+            and not _has_requirement_support(clean_question, results, self.store)
+        ):
+            return self._remember(
+                conversation_id,
+                clean_question,
+                ChatResponse(
+                    answer=(
+                        "The retrieved text for that standard does not establish the stated "
+                        "requirement. I should not treat absence from the retrieved evidence as "
+                        "proof that the full standard forbids or omits it."
+                    ),
+                    citations=[],
+                    unsupported=True,
                 ),
                 user_id=user_id,
                 unit_preference=unit_preference,
@@ -647,6 +706,12 @@ class StandardsRagEngine:
             return response
 
         cleaned = _strip_trailing_sources_footer(rewritten.strip())
+        chunks = dict(self.store.chunks)
+        chunks.update(self.design_store.chunks)
+        if unsupported_citation_markers(cleaned, response.citations, chunks):
+            return response
+        if uncited_standard_claims(cleaned):
+            return response
         return replace(response, answer=cleaned)
 
     def _plan_applicability_retrieval(
@@ -864,6 +929,15 @@ class StandardsRagEngine:
     ) -> ChatResponse:
         """Applicability template when method-family routing is active; keeps exclusions on primary methods only."""
         primary_bases = _ordered_primary_bases(route)
+        enriched_results = list(results)
+        enriched_chunk_ids = {result.chunk.chunk_id for result in enriched_results}
+        for base in primary_bases:
+            for document_id in _document_ids_for_canonical_base(self.store, base):
+                for wanted in ("scope", "significance"):
+                    hit = _section_result_from_store(self.store, document_id, wanted)
+                    if hit is not None and hit.chunk.chunk_id not in enriched_chunk_ids:
+                        enriched_results.append(hit)
+                        enriched_chunk_ids.add(hit.chunk.chunk_id)
 
         missing: list[str] = []
         applicable_rows: list[tuple[SearchResult, SearchResult, str | None]] = []
@@ -877,9 +951,16 @@ class StandardsRagEngine:
                 continue
             family = _family_for_canonical_base(base)
             label = _METHOD_FAMILY_LABELS.get(family) if family else None
-            scope_hit = _best_section_hit(flat, "scope") or _fallback_section_hit(flat, "scope")
-            significance_hit = _best_section_hit(flat, "significance") or _fallback_section_hit(
-                flat, "significance"
+            document_id = flat[0].document.document_id
+            scope_hit = (
+                _section_result_from_store(self.store, document_id, "scope")
+                or _best_section_hit(flat, "scope")
+                or _fallback_section_hit(flat, "scope")
+            )
+            significance_hit = (
+                _section_result_from_store(self.store, document_id, "significance")
+                or _best_section_hit(flat, "significance")
+                or _fallback_section_hit(flat, "significance")
             )
             if scope_hit and significance_hit:
                 applicable_rows.append((scope_hit, significance_hit, label))
@@ -924,7 +1005,7 @@ class StandardsRagEngine:
         for base in primary_bases:
             pool = [
                 r
-                for r in results
+                for r in enriched_results
                 if _canonical_method_base(r.document.standard_id) == base
                 and _material_exclusion_evidence_hit(r, base)
             ]
@@ -985,7 +1066,7 @@ class StandardsRagEngine:
         lines.append("\nWhy values may not translate directly into field design values:")
         design_any = False
         for base in primary_bases:
-            dl = _best_design_limit_result_for_base(results, base)
+            dl = _best_design_limit_result_for_base(enriched_results, base)
             if dl:
                 design_any = True
                 canon = _canonical_method_base(dl.document.standard_id)
@@ -1040,16 +1121,33 @@ class StandardsRagEngine:
         results: list[SearchResult],
         unit_preference: str | None,
     ) -> ChatResponse:
-        citations = _citations_from_results(results[:3])
+        selected = sorted(
+            results,
+            key=lambda result: _direct_evidence_rank(question, result),
+            reverse=True,
+        )[:3]
+        if _is_scope_lookup(question):
+            document_ids = list(dict.fromkeys(result.document.document_id for result in results))
+            scope_results = [
+                scoped
+                for document_id in document_ids
+                if (scoped := _section_result_from_store(self.store, document_id, "scope"))
+                is not None
+            ]
+            selected = (scope_results or results[:1])[:2]
+        elif _is_value_lookup(question):
+            selected = selected[:1]
+
+        citations = _citations_from_results(selected)
         evidence_lines = [
             f"{_evidence_sentence(result)} [{index}]"
-            for index, result in enumerate(results[:3], start=1)
+            for index, result in enumerate(selected, start=1)
         ]
         answer = "The loaded standards support the following answer:\n\n" + "\n".join(
             f"- {line}" for line in evidence_lines
         )
 
-        unit_note = _unit_note(results, unit_preference)
+        unit_note = _unit_note(selected, unit_preference)
         if unit_note:
             answer += f"\n\nUnit note: {unit_note}"
 
@@ -1063,10 +1161,25 @@ class StandardsRagEngine:
         )
 
     def _answer_find(self, question: str, results: list[SearchResult]) -> ChatResponse:
-        del question
+        title_scores = {
+            result.document.document_id: _document_title_overlap(question, result.document)
+            for result in results
+        }
+        best_title_score = max(title_scores.values(), default=0)
+        if best_title_score >= 2:
+            title_floor = max(2, best_title_score - 1)
+            results = [
+                result
+                for result in results
+                if title_scores[result.document.document_id] >= title_floor
+            ]
         by_document: dict[str, SearchResult] = {}
         for result in results:
-            by_document.setdefault(result.document.document_id, result)
+            document_id = result.document.document_id
+            by_document.setdefault(
+                document_id,
+                _section_result_from_store(self.store, document_id, "scope") or result,
+            )
         citations = _citations_from_results(by_document.values())
         lines = []
         for index, result in enumerate(by_document.values(), start=1):
@@ -1091,7 +1204,6 @@ class StandardsRagEngine:
         results: list[SearchResult],
         unit_preference: str | None,
     ) -> ChatResponse:
-        del question
         grouped: dict[str, list[SearchResult]] = {}
         for result in results:
             grouped.setdefault(result.document.document_id, []).append(result)
@@ -1106,7 +1218,11 @@ class StandardsRagEngine:
         comparison_lines = []
         cited_results: list[SearchResult] = []
         for index, group_results in enumerate(grouped.values(), start=1):
-            best = group_results[0]
+            document_id = group_results[0].document.document_id
+            best = (
+                _section_result_from_store(self.store, document_id, "scope")
+                or max(group_results, key=lambda item: _direct_evidence_rank(question, item))
+            )
             cited_results.append(best)
             comparison_lines.append(
                 f"- {best.document.standard_id}: {_evidence_sentence(best)} [{index}]"
@@ -1502,8 +1618,68 @@ def _evidence_sentence(result: SearchResult, *, max_chars: int = 360) -> str:
     if not best:
         best = result.chunk.text.replace("\n", " ").strip()
     if len(best) > max_chars:
-        return best[: max_chars - 3].rstrip() + "..."
+        return _excerpt_around_terms(best, preferred_terms, max_chars=max_chars)
     return best
+
+
+def _direct_evidence_rank(question: str, result: SearchResult) -> float:
+    """Favor answer-bearing passages over references, revision logs, and boilerplate."""
+    snippet = _evidence_sentence(result, max_chars=500)
+    lowered = _normalized_extracted_text(snippet).lower()
+    score = result.score + 0.4 * _question_sentence_overlap(question, snippet)
+
+    full_text = _normalized_extracted_text(result.chunk.text).lower()
+    if "referenced documents" in full_text:
+        score -= 1.5
+    if "adoption and revision schedule" in full_text:
+        score -= 1.5
+    if "takes no position respecting the validity of any patent rights" in full_text:
+        score -= 2.5
+    if "downloaded/printed by" in lowered:
+        score -= 1.0
+
+    question_lower = question.lower()
+    asks_for_value = any(
+        marker in question_lower
+        for marker in ("how much", "what value", "what content", "minimum", "maximum", "range")
+    )
+    if asks_for_value and re.search(r"\d", snippet):
+        score += 0.6
+    if "content" in question_lower and "%" in snippet and "content" in lowered:
+        score += 2.0
+    return score
+
+
+def _excerpt_around_terms(text: str, terms: set[str], *, max_chars: int) -> str:
+    """Keep the relevant part of a long table/paragraph instead of its opening columns."""
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) <= max_chars:
+        return compact
+
+    lowered = compact.lower()
+    positions = [lowered.find(term) for term in terms if term and lowered.find(term) >= 0]
+    if not positions:
+        return compact[: max_chars - 3].rstrip() + "..."
+
+    best_start = 0
+    best_score = -1
+    for position in positions:
+        start = max(position - max_chars // 10, 0)
+        end = min(start + max_chars, len(compact))
+        start = max(end - max_chars, 0)
+        window = lowered[start:end]
+        score = sum(1 for term in terms if term and term in window)
+        if score > best_score:
+            best_score = score
+            best_start = start
+
+    end = min(best_start + max_chars, len(compact))
+    snippet = compact[best_start:end].strip()
+    if best_start:
+        snippet = "..." + snippet.lstrip(" ,;:")
+    if end < len(compact):
+        snippet = snippet.rstrip(" ,;:") + "..."
+    return snippet
 
 
 def _top_scoring_sentence(text: str, keywords: tuple[str, ...], *, max_chars: int = 360) -> str:
@@ -1540,6 +1716,18 @@ def _faceted_sentence_for_design_limit(result: SearchResult, canonical_base: str
                 "shear",
             )
         case "D5887":
+            normalized = re.sub(r"\s+", " ", _normalized_extracted_text(result.chunk.text))
+            for sentence in re.split(r"(?<=[.!?])\s+", normalized):
+                lowered = sentence.lower()
+                if any(
+                    phrase in lowered
+                    for phrase in (
+                        "not considered to be representative",
+                        "does not provide a flux value",
+                        "not provide a flux value",
+                    )
+                ):
+                    return sentence.strip()
             keywords = (
                 "index",
                 "flux",
@@ -1559,7 +1747,7 @@ def _faceted_sentence_for_exclusion_material(result: SearchResult, canonical_bas
     match canonical_base:
         case "D5321":
             keywords = ("exclude", "excluded", "gcl", "geosynthetic clay", "clay liner")
-        case "D5887":
+        case "D5887" | "D6766":
             keywords = (
                 "exclude",
                 "excluded",
@@ -1611,6 +1799,61 @@ def _document_source_url(document: StandardDocument) -> str | None:
 
 def _chunk_section_type(result: SearchResult) -> str:
     return str(result.chunk.metadata.get("section_type", "other"))
+
+
+def _normalized_extracted_text(value: str) -> str:
+    return (
+        value.replace("ﬁ", "fi")
+        .replace("ﬂ", "fl")
+        .replace("ﬀ", "ff")
+        .replace("ﬃ", "ffi")
+        .replace("ﬄ", "ffl")
+    )
+
+
+def _section_result_from_store(
+    store: InMemoryStandardsStore,
+    document_id: str,
+    wanted: str,
+) -> SearchResult | None:
+    """Find an explicit Scope/Significance heading even when ingest metadata missed it."""
+    if wanted == "scope":
+        pattern = re.compile(r"(?:^|\n)\s*1\.?\s*scope\b", re.IGNORECASE)
+        matched_terms = ("scope", "cover", "covers", "measure", "measurement", "applies")
+    elif wanted == "significance":
+        pattern = re.compile(
+            r"(?:^|\n)\s*\d+\.?\s*significance(?:\s+and\s+use)?\b",
+            re.IGNORECASE,
+        )
+        matched_terms = (
+            "significance",
+            "applies",
+            "provides",
+            "yields",
+            "design",
+            "conditions",
+        )
+    else:
+        return None
+
+    candidates: list[tuple[int, int, SourceChunk]] = []
+    for chunk in store.chunks.values():
+        if chunk.document_id != document_id:
+            continue
+        normalized = _normalized_extracted_text(chunk.text)
+        match = pattern.search(normalized)
+        if match:
+            candidates.append((chunk.order, match.start(), chunk))
+    if not candidates:
+        return None
+
+    _, _, chunk = min(candidates, key=lambda item: (item[0], item[1]))
+    return SearchResult(
+        chunk=chunk,
+        document=store.documents[document_id],
+        score=10.0,
+        matched_terms=matched_terms,
+    )
 
 
 def _best_by_document(results: list[SearchResult]) -> list[SearchResult]:
@@ -1701,14 +1944,16 @@ def _section_matches(result: SearchResult, section_type: str) -> bool:
 
 
 def _supports_exclusion_claim(result: SearchResult) -> bool:
-    text = result.chunk.text.lower()
+    text = re.sub(r"\s+", " ", _normalized_extracted_text(result.chunk.text).lower())
     return any(
         marker in text
         for marker in (
             "does not apply",
             "do not apply",
+            "not applicable",
             "excluded",
             "exclude",
+            "with the exception",
             "limited to",
             "only applies",
             "not intended",
@@ -1750,6 +1995,8 @@ _METHOD_FAMILY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "gcl_hydraulic_barrier": (
         "gcl hydraulic barrier",
         "hydraulic barrier",
+        "hydraulic performance",
+        "hydraulic conductivity",
         "barrier performance",
         "flux",
         "permeability",
@@ -1769,7 +2016,7 @@ _METHOD_FAMILY_KEYWORDS: dict[str, tuple[str, ...]] = {
 
 _METHOD_FAMILY_TO_STANDARDS: dict[str, tuple[str, ...]] = {
     "interface_stability": ("D5321",),
-    "gcl_hydraulic_barrier": ("D5887",),
+    "gcl_hydraulic_barrier": ("D5887", "D6766"),
     "drainage_transmissivity": ("D4716",),
     "stress_crack_durability": ("D5397",),
 }
@@ -1863,11 +2110,20 @@ def _material_exclusion_evidence_hit(result: SearchResult, canonical_base: str) 
     """True when the excerpt looks like explicit material applicability / exclusion wording."""
     if not _supports_exclusion_claim(result):
         return False
-    text = result.chunk.text.lower()
+    text = re.sub(r"\s+", " ", _normalized_extracted_text(result.chunk.text).lower())
     if _PROCEDURE_ARTIFACT_TERMS_RE.search(text) and not _material_anchor_hit(text):
         return False
 
-    applicators_ph = ["limited to", "only applies", "only to", "applies only", "exclude", "excluded"]
+    applicators_ph = [
+        "limited to",
+        "only applies",
+        "only to",
+        "applies only",
+        "exclude",
+        "excluded",
+        "not applicable",
+        "with the exception",
+    ]
 
     def _clause_ok(snippet: str) -> bool:
         return any(marker in snippet for marker in applicators_ph)
@@ -1880,7 +2136,7 @@ def _material_exclusion_evidence_hit(result: SearchResult, canonical_base: str) 
                 phrase in text
                 for phrase in ("gcl", "geosynthetic clay", "clay liners", "clay liner", "liner (gcl)")
             )
-        case "D5887":
+        case "D5887" | "D6766":
             if not _clause_ok(text):
                 return False
             geo_back = "geotextile" in text and ("back" in text or "backing" in text)
@@ -1892,7 +2148,7 @@ def _material_exclusion_evidence_hit(result: SearchResult, canonical_base: str) 
 
 
 def _material_exclusion_strength(result: SearchResult, canonical_base: str) -> int:
-    t = result.chunk.text.lower()
+    t = re.sub(r"\s+", " ", _normalized_extracted_text(result.chunk.text).lower())
     score = 0
     for token in ("exclude", "excluded", "only applies", "only to", "applies only", "limited to"):
         if token in t:
@@ -1901,7 +2157,7 @@ def _material_exclusion_strength(result: SearchResult, canonical_base: str) -> i
         for ph in ("gcl", "geosynthetic clay", "clay liner", "clay liners"):
             if ph in t:
                 score += 4
-    elif canonical_base == "D5887":
+    elif canonical_base in {"D5887", "D6766"}:
         if "geomembrane" in t:
             score += 4
         if "geofilm" in t:
@@ -1940,9 +2196,13 @@ def _design_limitation_evidence_hit(result: SearchResult, canonical_base: str) -
         case "D5887":
             has_index_flux = "index" in text and ("flux" in text or "permeab" in text)
             transfers = ("not representative" in text or "not intended" in text or "prescribed" in text)
-            return (has_index_flux and transfers) or (
-                ("index" in text or "flux" in text) and ("design" in text or "field" in text)
+            explicit_design_limit = bool(
+                re.search(r"\bdesign\b|\bin-service\b|\bfield\b", text)
+            ) and any(
+                phrase in text
+                for phrase in ("does not provide", "not representative", "not intended")
             )
+            return (has_index_flux and transfers) or explicit_design_limit
         case _:
             return False
 
@@ -2142,7 +2402,102 @@ def _is_compare_question(question: str) -> bool:
 
 def _is_find_question(question: str) -> bool:
     lowered = question.lower()
-    return any(phrase in lowered for phrase in ["find", "which standard", "what standard", "relevant"])
+    return any(
+        phrase in lowered
+        for phrase in [
+            "find",
+            "which standard",
+            "which loaded standard",
+            "what standard",
+            "relevant",
+        ]
+    )
+
+
+def _is_scope_lookup(question: str) -> bool:
+    lowered = question.lower()
+    return (
+        "scope" in lowered
+        or "used for" in lowered
+        or ("what does" in lowered and any(word in lowered for word in ("cover", "measure")))
+    )
+
+
+def _is_value_lookup(question: str) -> bool:
+    lowered = question.lower()
+    return ("what" in lowered and "content" in lowered) or any(
+        marker in lowered
+        for marker in ("how much", "what value", "what content", "minimum", "maximum", "range")
+    )
+
+
+def _is_requirement_verification_question(question: str) -> bool:
+    lowered = question.lower().strip()
+    return bool(re.match(r"^(?:does|do|is|are|must|should)\b", lowered)) and any(
+        marker in lowered for marker in ("require", "required", "specify", "mandate", "shall")
+    )
+
+
+def _has_requirement_support(
+    question: str,
+    results: list[SearchResult],
+    store: InMemoryStandardsStore,
+) -> bool:
+    without_designations = SPECIFIC_STANDARD_RE.sub(" ", question)
+    generic = {
+        "astm",
+        "does",
+        "require",
+        "required",
+        "requirement",
+        "specify",
+        "specified",
+        "mandate",
+        "shall",
+        "standard",
+    }
+    terms = [term for term in _tokens(without_designations) if term not in generic]
+    if not terms:
+        return True
+
+    numeric_terms = {term for term in terms if any(character.isdigit() for character in term)}
+    document_ids = {result.document.document_id for result in results}
+    needed = max(2 if len(terms) > 1 else 1, (len(set(terms)) + 1) // 2)
+    for chunk in store.chunks.values():
+        if chunk.document_id not in document_ids:
+            continue
+        chunk_terms = set(_tokens(chunk.text))
+        if numeric_terms and not numeric_terms.issubset(chunk_terms):
+            continue
+        hits = 0
+        for term in set(terms):
+            if term in chunk_terms:
+                hits += 1
+                continue
+            if len(term) >= 6 and any(
+                len(candidate) >= 6 and candidate[:6] == term[:6] for candidate in chunk_terms
+            ):
+                hits += 1
+        if hits >= needed:
+            return True
+    return False
+
+
+def _document_title_overlap(question: str, document: StandardDocument) -> int:
+    generic = {
+        "loaded",
+        "standard",
+        "standards",
+        "method",
+        "methods",
+        "measure",
+        "measures",
+        "cover",
+        "covers",
+        "relevant",
+    }
+    query_terms = {term for term in _tokens(question) if term not in generic}
+    return len(query_terms & set(_tokens(document.title)))
 
 
 def _is_context_meaning_question(question: str, results: list[SearchResult]) -> bool:
@@ -2302,13 +2657,49 @@ def _document_ids_for_bodies(
 def _document_ids_for_explicit_standard(
     question: str, documents: dict[str, StandardDocument]
 ) -> set[str] | None:
-    compact_question = re.sub(r"[^a-z0-9]", "", question.lower())
+    mentioned_keys: set[str] = set()
+    for match in SPECIFIC_STANDARD_RE.finditer(question):
+        mentioned_keys.update(_standard_lookup_keys(match.group(0)))
+    if not mentioned_keys:
+        return None
+
     matches: set[str] = set()
     for document in documents.values():
-        compact_id = re.sub(r"[^a-z0-9]", "", document.standard_id.lower())
-        if compact_id and compact_id in compact_question:
+        if mentioned_keys & _standard_lookup_keys(document.standard_id):
             matches.add(document.document_id)
     return matches or None
+
+
+def _standard_lookup_keys(value: str) -> set[str]:
+    """Aliases used to match a designation with or without body/revision text.
+
+    People commonly type ``D4595`` for ``D4595-24`` and ``GM13`` for
+    ``GRI-GM13r``. Matching these aliases before retrieval keeps every answer and
+    citation inside the intended document family.
+    """
+    raw = (value or "").upper().strip()
+    raw = re.sub(r"^(?:ASTM|GRI)[-\s]*", "", raw)
+    compact = re.sub(r"[^A-Z0-9]", "", raw)
+    if not compact:
+        return set()
+
+    keys = {compact}
+    if compact.startswith("ISO"):
+        match = re.match(r"ISO(\d+)", compact)
+        if match:
+            keys.add(f"ISO{match.group(1)}")
+        return keys
+
+    astm = re.match(r"([A-Z]\d{2,5})(?=/|[-–\s(]|$)", raw)
+    if astm:
+        keys.add(astm.group(1))
+
+    gri = re.match(r"((?:GCL|GG|GM|GN|GC|GT|GS)\d+)([A-Z]?)", compact)
+    if gri:
+        keys.add(gri.group(1))
+        if gri.group(2):
+            keys.add(gri.group(1) + gri.group(2))
+    return keys
 
 
 def _prose_quality(text: str) -> int:

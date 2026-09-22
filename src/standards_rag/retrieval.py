@@ -6,7 +6,7 @@ import json
 import math
 import os
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -409,15 +409,17 @@ class InMemoryStandardsStore:
     def load_json(cls, path: str | Path) -> "InMemoryStandardsStore":
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         store = cls()
-        documents = {
+        store.documents = {
             item["document_id"]: StandardDocument.from_dict(item) for item in payload["documents"]
         }
-        chunks_by_document: dict[str, list[SourceChunk]] = defaultdict(list)
+        store.chunks = {}
         for item in payload["chunks"]:
             chunk = SourceChunk.from_dict(item)
-            chunks_by_document[chunk.document_id].append(chunk)
-        for document_id, document in documents.items():
-            store.add_document(document, chunks_by_document.get(document_id, []))
+            if chunk.document_id in store.documents:
+                store.chunks[chunk.chunk_id] = chunk
+        # Rebuilding after every document makes loading O(documents * chunks). The JSON
+        # already contains the complete corpus, so build the token index exactly once.
+        store._reindex()
         return store
 
     def _reindex(self) -> None:
@@ -508,7 +510,40 @@ def _metadata_boost(query: str, document: StandardDocument, chunk: SourceChunk) 
         boost += 0.1
     if chunk.section and f"section {chunk.section}".lower() in query_lower:
         boost += 0.4
+    boost += _title_match_boost(query, document.title)
     return boost
+
+
+def _title_match_boost(query: str, title: str) -> float:
+    """Prefer the standard whose own title answers discovery queries over cross-references."""
+    generic = {
+        "loaded",
+        "standard",
+        "standards",
+        "method",
+        "methods",
+        "measure",
+        "measures",
+        "cover",
+        "covers",
+        "relevant",
+    }
+    query_terms = {term for term in _tokens(query) if term not in generic}
+    if not query_terms:
+        return 0.0
+    title_terms = set(_tokens(title))
+    overlap = query_terms & title_terms
+    if not overlap:
+        return 0.0
+    boost = 0.8 * (len(overlap) / len(query_terms))
+
+    title_lower = title.lower()
+    phrase_hits = sum(
+        1
+        for phrase in _important_phrases(query)
+        if phrase and all(term not in generic for term in phrase.split()) and phrase in title_lower
+    )
+    return boost + min(phrase_hits * 0.2, 0.6)
 
 
 def _important_phrases(value: str) -> list[str]:

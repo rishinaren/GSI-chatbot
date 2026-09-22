@@ -12,8 +12,8 @@ from standards_rag.models import SourceChunk, StandardDocument
 from standards_rag.retrieval import (
     InMemoryStandardsStore,
     SearchResult,
+    _chunk_index_text,
     rerank_results_for_citation,
-    section_intent_boost,
     _tokens,
 )
 
@@ -256,27 +256,49 @@ class PineconeHybridStore(InMemoryStandardsStore):
         )
 
         matches = getattr(query_response, "matches", None) or []
-        fused_scores: list[tuple[float, str]] = []
-        for match in matches:
+        semantic_rank: dict[str, int] = {}
+        for rank, match in enumerate(matches, start=1):
             chunk_id = str(match.id)
             pinecone_score = float(match.score or 0.0)
-            chunk = self.chunks.get(chunk_id)
-            if not chunk:
+            if chunk_id not in self.chunks or pinecone_score < min_score:
                 continue
-            document = self.documents[chunk.document_id]
-            lexical_score = _lexical_overlap_score(query_terms, chunk, document)
-            intent_boost = section_intent_boost(query, chunk)
-            fused = 0.65 * pinecone_score + 0.35 * lexical_score + intent_boost
-            if fused >= min_score:
-                fused_scores.append((fused, chunk_id))
+            semantic_rank.setdefault(chunk_id, rank)
 
-        fused_scores.sort(key=lambda item: item[0], reverse=True)
+        # Dense-only candidate generation misses exact titles and designations surprisingly
+        # often. Run the local lexical index as a second retriever and fuse the two ranked
+        # lists. Reciprocal-rank fusion is intentionally scale-independent: Pinecone cosine
+        # scores and the local TF-IDF-like scores are not directly comparable.
+        lexical = super().search(
+            query,
+            top_k=max(top_k * 8, 32),
+            document_ids=document_ids,
+            min_score=max(min_score * 0.5, 0.003),
+        )
+        lexical_rank = {
+            result.chunk.chunk_id: rank for rank, result in enumerate(lexical, start=1)
+        }
+
+        candidate_ids = set(semantic_rank) | set(lexical_rank)
+        fused_scores: list[tuple[float, str]] = []
+        rrf_k = 60
+        for chunk_id in candidate_ids:
+            score = 0.0
+            if chunk_id in semantic_rank:
+                score += 0.50 / (rrf_k + semantic_rank[chunk_id])
+            if chunk_id in lexical_rank:
+                score += 0.50 / (rrf_k + lexical_rank[chunk_id])
+            # Scale into the historical score range used by downstream confidence gates.
+            fused_scores.append((score * 30.0, chunk_id))
+
+        fused_scores.sort(key=lambda item: (-item[0], item[1]))
         if fused_scores:
             candidates: list[SearchResult] = []
             for score, chunk_id in fused_scores[: max(top_k * 4, 16)]:
                 chunk = self.chunks[chunk_id]
                 document = self.documents[chunk.document_id]
-                matched_terms = tuple(sorted(set(query_terms) & set(_tokens(chunk.text))))
+                matched_terms = tuple(
+                    sorted(set(query_terms) & set(_tokens(_chunk_index_text(chunk, document))))
+                )
                 candidates.append(
                     SearchResult(
                         chunk=chunk,
