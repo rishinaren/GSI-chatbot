@@ -244,10 +244,10 @@ export function getChatPreferences() {
   return request("/preferences");
 }
 
-export function updateChatPreferences(focus) {
+export function updateChatPreferences({ focus, level }) {
   return request("/preferences", {
     method: "PUT",
-    body: JSON.stringify({ focus }),
+    body: JSON.stringify({ focus, level }),
   });
 }
 
@@ -359,6 +359,15 @@ export function sendChat(payload) {
   return request("/chat", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+// Re-explains a saved answer for another reader, from the same sources. The
+// server finds the answer by its text, so only what was saved can be rewritten.
+export function changeAnswerLevel({ conversationId, answer, level }) {
+  return request("/chat/level", {
+    method: "POST",
+    body: JSON.stringify({ conversation_id: conversationId, answer, level }),
   });
 }
 

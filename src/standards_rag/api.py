@@ -19,8 +19,12 @@ from standards_rag.auth import (
     resend_confirmation_code,
     sign_up_with_password,
 )
+from standards_rag.answer_prompts import DEFAULT_ANSWER_LEVEL, normalize_answer_level
 from standards_rag.chat import StandardsRagEngine
-from standards_rag.conversation_store import build_conversation_store_from_env
+from standards_rag.conversation_store import (
+    ConversationRecord,
+    build_conversation_store_from_env,
+)
 from standards_rag.env_bootstrap import (
     default_design_guidance_index_path,
     default_standards_index_path,
@@ -55,6 +59,7 @@ from standards_rag.openai_answer import (
     openai_rewriter_enabled,
 )
 from standards_rag.pinecone_hybrid import attach_pinecone_index, pinecone_enabled_from_env
+from standards_rag.models import Citation
 from standards_rag.retrieval import InMemoryStandardsStore, resolve_document_pdf_path
 from standards_rag.video import build_video_store_from_env
 
@@ -82,6 +87,24 @@ def _allowed_origins() -> list[str]:
     if not raw:
         return defaults
     return defaults + [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+def _find_answer_index(record: ConversationRecord, answer: str) -> int | None:
+    """Position of the saved answer whose text (or any saved level of it) is ``answer``.
+
+    Matched on text, newest first, since unsaved clarifying turns make the
+    browser's positions drift from the saved ones.
+    """
+    needle = answer.strip()
+    for index in range(len(record.messages) - 1, -1, -1):
+        message = record.messages[index]
+        if message.role != "assistant":
+            continue
+        if message.text.strip() == needle or needle in (
+            version.strip() for version in message.versions.values()
+        ):
+            return index
+    return None
 
 
 def create_app(
@@ -383,19 +406,28 @@ def create_app(
         user = effective_user(request)
         preferences = conversation_store.get_user_preferences(user.user_id)
         if preferences is None:
-            return {"focus": None, "onboarding_complete": False}
+            return {"focus": None, "level": DEFAULT_ANSWER_LEVEL, "onboarding_complete": False}
         return preferences.to_public_dict()
 
     @app.put("/preferences")
     def update_preferences(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
         user = effective_user(request)
-        focus = str(payload.get("focus") or "").strip().lower()
-        if focus not in {"testing", "design", "both"}:
+        focus = str(payload.get("focus") or "").strip().lower() or None
+        if focus is not None and focus not in {"testing", "design", "both"}:
             raise HTTPException(
                 status_code=400,
                 detail="focus must be testing, design, or both",
             )
-        return conversation_store.set_user_preferences(user.user_id, focus).to_public_dict()
+        level = normalize_answer_level(payload.get("level"))
+        if payload.get("level") and level is None:
+            raise HTTPException(
+                status_code=400, detail="level must be beginner, intermediate, or advanced"
+            )
+        if focus is None and level is None:
+            raise HTTPException(status_code=400, detail="focus or level is required")
+        return conversation_store.set_user_preferences(
+            user.user_id, focus, level=level
+        ).to_public_dict()
 
     @app.post("/conversations")
     def create_conversation(
@@ -693,6 +725,11 @@ def create_app(
         retrieval_focus = requested_focus or (
             saved_preferences.focus if saved_preferences is not None else "testing"
         )
+        # "Ask again" on an answer the person moved to another level re-asks at that
+        # level; everything else follows their saved preference.
+        answer_level = normalize_answer_level(payload.get("level")) or (
+            saved_preferences.level if saved_preferences is not None else DEFAULT_ANSWER_LEVEL
+        )
 
         raw_ids = payload.get("attachment_ids")
         attachments = []
@@ -718,8 +755,78 @@ def create_app(
             user_id=user.user_id,
             attachments=attachments,
             retrieval_focus=retrieval_focus,
+            answer_level=answer_level,
         )
         return response.to_dict()
+
+    @app.post("/chat/level")
+    def change_answer_level(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:
+        """Re-explain a saved answer for another reader, from the same sources.
+
+        The answer is found on the server by its text (as feedback does), so the
+        question and citations come from what was saved, not from the browser.
+        """
+        user = effective_user(request)
+        level = normalize_answer_level(payload.get("level"))
+        if level is None:
+            raise HTTPException(
+                status_code=400, detail="level must be beginner, intermediate, or advanced"
+            )
+        conversation_id = str(payload.get("conversation_id") or "").strip()
+        answer = str(payload.get("answer") or "").strip()
+        record = (
+            conversation_store.get_conversation(user.user_id, conversation_id)
+            if conversation_id and answer
+            else None
+        )
+        index = _find_answer_index(record, answer) if record is not None else None
+        if record is None or index is None:
+            raise HTTPException(
+                status_code=404,
+                detail="We could not find that answer. Please ask the question again.",
+            )
+        message = record.messages[index]
+        citations = [Citation.from_dict(item) for item in message.citations if isinstance(item, dict)]
+        if not citations:
+            raise HTTPException(
+                status_code=400, detail="This answer has no sources to re-explain."
+            )
+
+        text = message.versions.get(level)
+        if text is None:
+            asked = next(
+                (
+                    record.messages[back]
+                    for back in range(index - 1, -1, -1)
+                    if record.messages[back].role == "user"
+                ),
+                None,
+            )
+            attachment_names = [
+                str(item.get("file_name") or "")
+                for item in (asked.attachments if asked is not None else [])
+                if isinstance(item, dict) and item.get("file_name")
+            ]
+            text = engine.rewrite_for_level(
+                asked.text if asked is not None else "",
+                message.text,
+                citations,
+                level,
+                attachment_names=attachment_names or None,
+            )
+            if text is None:
+                raise HTTPException(
+                    status_code=502,
+                    detail="We could not rewrite that answer just now. Please try again.",
+                )
+        conversation_store.set_answer_level(
+            user.user_id, conversation_id, index, level=level, text=text
+        )
+        return {
+            "answer": text,
+            "level": level,
+            "citations": [citation.to_dict() for citation in citations],
+        }
 
     @app.post("/feedback")
     def submit_feedback(payload: dict[str, Any], request: FastAPIRequest) -> dict[str, object]:

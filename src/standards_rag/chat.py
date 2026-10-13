@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from standards_rag.answer_prompts import DEFAULT_ANSWER_LEVEL, normalize_answer_level
 from standards_rag.attachments import (
     Attachment,
     attachment_citations,
@@ -18,6 +19,9 @@ from standards_rag.attachments import (
     select_passages,
 )
 from standards_rag.citation_validation import (
+    CITE_MARKER,
+    attach_missing_markers,
+    drop_unsupported_sentences,
     uncited_standard_claims,
     unsupported_citation_markers,
     validate_answer_citations,
@@ -51,6 +55,7 @@ SPECIFIC_STANDARD_RE = re.compile(
     re.IGNORECASE,
 )
 PARTIAL_SUPPORT_SCORE_THRESHOLD = 0.08
+REWRITE_ATTEMPTS = 2
 DOMAIN_ANCHOR_TERMS = {
     "geotextile",
     "geotextiles",
@@ -97,6 +102,9 @@ class ChatResponse:
     follow_up_suggestions: list[str] = field(default_factory=list)
     videos: list[dict[str, object]] = field(default_factory=list)
     video_suggestions: list[dict[str, object]] = field(default_factory=list)
+    # The reader level the answer was written for. None on refusals and
+    # clarifying questions, which have no sources to re-explain.
+    level: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -107,6 +115,7 @@ class ChatResponse:
             "follow_up_suggestions": self.follow_up_suggestions,
             "videos": self.videos,
             "video_suggestions": self.video_suggestions,
+            "level": self.level,
         }
 
 
@@ -160,10 +169,12 @@ class StandardsRagEngine:
         user_id: str | None = None,
         attachments: list[Attachment] | None = None,
         retrieval_focus: str = "testing",
+        answer_level: str = DEFAULT_ANSWER_LEVEL,
     ) -> ChatResponse:
         clean_question = question.strip()
         attached = list(attachments or [])
         focus = retrieval_focus if retrieval_focus in {"testing", "design", "both"} else "testing"
+        level = normalize_answer_level(answer_level) or DEFAULT_ANSWER_LEVEL
         if user_id and self.conversation_store:
             self._hydrate_history_from_store(user_id, conversation_id)
         if not clean_question:
@@ -201,6 +212,7 @@ class StandardsRagEngine:
                 unit_preference=unit_preference,
                 user_id=user_id,
                 attachments=attached,
+                level=level,
             )
             if design_response is not None:
                 return design_response
@@ -394,7 +406,7 @@ class StandardsRagEngine:
             response = self._answer_direct(clean_question, results, unit_preference)
 
         response = self._add_attachment_evidence(clean_question, response, attached)
-        response = self._maybe_rewrite_answer(clean_question, response, attached)
+        response = self._maybe_rewrite_answer(clean_question, response, attached, level=level)
         response = self._verify_citations_in_answer(response)
         response = self._attach_videos(clean_question, response)
         return self._remember(
@@ -415,6 +427,7 @@ class StandardsRagEngine:
         unit_preference: str | None,
         user_id: str | None,
         attachments: list[Attachment],
+        level: str = DEFAULT_ANSWER_LEVEL,
     ) -> ChatResponse | None:
         history = self._history.get(conversation_id, [])
         query = question
@@ -491,7 +504,7 @@ class StandardsRagEngine:
             ],
         )
         response = self._add_attachment_evidence(question, response, attachments)
-        response = self._maybe_rewrite_answer(question, response, attachments)
+        response = self._maybe_rewrite_answer(question, response, attachments, level=level)
         response = self._verify_citations_in_answer(response)
         response = self._attach_videos(question, response)
         return self._remember(
@@ -684,35 +697,135 @@ class StandardsRagEngine:
         question: str,
         response: ChatResponse,
         attachments: list[Attachment] | None = None,
+        *,
+        level: str = DEFAULT_ANSWER_LEVEL,
     ) -> ChatResponse:
-        if not self.answer_rewriter:
-            return response
         if response.unsupported or response.needs_clarification or not response.citations:
+            return response
+        response = replace(response, level=level)
+        if not self.answer_rewriter:
             return response
         if response.answer.startswith("There are multiple context-dependent meanings/usages"):
             return response
 
-        try:
-            rewritten = self.answer_rewriter(
-                response.answer,
+        draft = response.answer
+        if level == "advanced":
+            # The draft carries one sentence per excerpt, which is enough to explain
+            # but not to give the conditions and limits a specialist asks for.
+            draft = f"{draft}\n\n{self._excerpt_appendix(response.citations)}"
+        # A second try costs one more call only when the first rewrite fails the
+        # citation checks, and is far better than showing the raw excerpts.
+        for attempt in range(REWRITE_ATTEMPTS):
+            rewritten = self._grounded_rewrite(
+                draft,
                 question,
                 response.citations,
+                trim=attempt == REWRITE_ATTEMPTS - 1,
                 attachments=[attachment.file_name for attachment in attachments or []],
+                level=level,
             )
+            if rewritten:
+                return replace(response, answer=rewritten)
+        return response
+
+    def rewrite_for_level(
+        self,
+        question: str,
+        answer: str,
+        citations: list[Citation],
+        level: str,
+        *,
+        attachment_names: list[str] | None = None,
+    ) -> str | None:
+        """Re-explain an answer already given for a different reader.
+
+        Works from the same citations, so the sources stay put and only the depth
+        of explanation moves: no new retrieval, no new facts. Returns None when no
+        rewrite survives the citation checks, rather than showing raw excerpts.
+        """
+        if not self.answer_rewriter or not citations or not answer.strip():
+            return None
+        level = normalize_answer_level(level) or DEFAULT_ANSWER_LEVEL
+        # A newcomer needs less of each excerpt; handing over all of it pulls the
+        # writer back into the detail the beginner version should leave out.
+        excerpt_chars = {"beginner": 500, "intermediate": 1000, "advanced": 1600}[level]
+        draft = (
+            "Answer already given (each [n] marker is checked against its excerpt):\n"
+            f"{answer.strip()}\n\n"
+            f"{self._excerpt_appendix(citations, max_chars=excerpt_chars)}"
+        )
+        for attempt in range(REWRITE_ATTEMPTS):
+            rewritten = self._grounded_rewrite(
+                draft,
+                question,
+                citations,
+                trim=attempt == REWRITE_ATTEMPTS - 1,
+                attachments=attachment_names or [],
+                level=level,
+                rephrase=True,
+            )
+            if rewritten:
+                return rewritten
+        return None
+
+    def _grounded_rewrite(
+        self,
+        draft: str,
+        question: str,
+        citations: list[Citation],
+        *,
+        trim: bool = False,
+        **options: object,
+    ) -> str | None:
+        """One rewriter call, kept only if every marker still holds up.
+
+        With ``trim`` (the last try), sentences whose marker does not hold up are
+        removed rather than failing the whole answer; what remains goes through
+        the same checks and must still cite something.
+        """
+        if not self.answer_rewriter:
+            return None
+        try:
+            rewritten = self.answer_rewriter(draft, question, citations, **options)
         except Exception:
-            return response
-
-        if not rewritten.strip():
-            return response
-
-        cleaned = _strip_trailing_sources_footer(rewritten.strip())
+            return None
+        cleaned = _strip_trailing_sources_footer((rewritten or "").strip())
+        if not cleaned:
+            return None
         chunks = dict(self.store.chunks)
         chunks.update(self.design_store.chunks)
-        if unsupported_citation_markers(cleaned, response.citations, chunks):
-            return response
+        cleaned = attach_missing_markers(cleaned, citations, chunks)
+        if trim and unsupported_citation_markers(cleaned, citations, chunks):
+            cleaned = drop_unsupported_sentences(cleaned, citations, chunks)
+            if not CITE_MARKER.search(cleaned):
+                return None
+        if unsupported_citation_markers(cleaned, citations, chunks):
+            return None
         if uncited_standard_claims(cleaned):
-            return response
-        return replace(response, answer=cleaned)
+            return None
+        return cleaned
+
+    def _excerpt_appendix(self, citations: list[Citation], *, max_chars: int = 1600) -> str:
+        """The cited excerpts in full, numbered to match the answer's markers."""
+        lines = ["Full text of the cited excerpts:"]
+        for index, citation in enumerate(citations, start=1):
+            chunk = self.store.chunks.get(citation.chunk_id) or self.design_store.chunks.get(
+                citation.chunk_id
+            )
+            text = " ".join(((chunk.text if chunk else "") or citation.quote or "").split())
+            if len(text) > max_chars:
+                text = text[:max_chars].rsplit(" ", 1)[0] + " …"
+            where = ", ".join(
+                part
+                for part in (
+                    citation.standard_id,
+                    f"Section {citation.section}" if citation.section else "",
+                    citation.page_label if citation.page_start is not None else "",
+                )
+                if part
+            )
+            lines.append(f"[{index}] ({where}) {text}")
+        return "\n".join(lines)
 
     def _plan_applicability_retrieval(
         self,
@@ -1416,6 +1529,7 @@ class StandardsRagEngine:
                 question=question,
                 answer=response.answer,
                 citations=[citation.to_dict() for citation in response.citations],
+                level=response.level,
                 unit_preference=unit_preference,
                 title_generator=self.title_generator,
                 # Name only - the document text is never persisted. Reopening the

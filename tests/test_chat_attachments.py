@@ -141,9 +141,11 @@ class RewriterHandoffTests(unittest.TestCase):
         self.spec = read_attachment(_pdf_bytes(SPEC_LINES), "spec.pdf", owner_id="user-1")
         self.seen: dict[str, object] = {}
 
-        def rewriter(draft, question, citations, *, attachments=None):
+        def rewriter(draft, question, citations, *, attachments=None, **options):
             self.seen["attachments"] = attachments
             self.seen["citations"] = citations
+            self.seen["draft"] = draft
+            self.seen.update(options)
             return "Rewritten answer. [1]"
 
         self.engine = StandardsRagEngine(self.store, answer_rewriter=rewriter)
@@ -155,6 +157,60 @@ class RewriterHandoffTests(unittest.TestCase):
     def test_no_attachment_means_an_empty_list_not_a_surprise(self) -> None:
         self.engine.ask("Which geotextile tensile strength standard applies?")
         self.assertEqual(self.seen["attachments"], [])
+
+    def test_the_writer_is_told_the_reader_level(self) -> None:
+        response = self.engine.ask(
+            "Which geotextile tensile strength standard applies?", answer_level="beginner"
+        )
+        self.assertEqual(self.seen["level"], "beginner")
+        self.assertEqual(response.level, "beginner")
+
+    def test_an_unknown_level_falls_back_to_intermediate(self) -> None:
+        response = self.engine.ask(
+            "Which geotextile tensile strength standard applies?", answer_level="expert"
+        )
+        self.assertEqual(self.seen["level"], "intermediate")
+        self.assertEqual(response.level, "intermediate")
+
+    def test_advanced_answers_see_the_full_excerpts(self) -> None:
+        self.engine.ask(
+            "Which geotextile tensile strength standard applies?", answer_level="advanced"
+        )
+        self.assertIn("Full text of the cited excerpts", self.seen["draft"])
+
+    def test_a_level_change_rewrites_from_the_same_citations(self) -> None:
+        first = self.engine.ask("Which geotextile tensile strength standard applies?")
+        grounded = "D4595 covers the wide-width strip tensile method for geotextiles. [1]"
+
+        def rewriter(draft, question, citations, **options):
+            self.seen.update(options, draft=draft, citations=citations)
+            return grounded
+
+        rewritten = StandardsRagEngine(self.store, answer_rewriter=rewriter).rewrite_for_level(
+            "Which geotextile tensile strength standard applies?",
+            first.answer,
+            first.citations,
+            "advanced",
+        )
+        self.assertEqual(rewritten, grounded)
+        self.assertTrue(self.seen["rephrase"])
+        self.assertEqual(self.seen["level"], "advanced")
+        self.assertEqual(self.seen["citations"], first.citations)
+        self.assertIn(first.answer.strip(), self.seen["draft"])
+
+    def test_a_level_change_that_breaks_a_citation_is_refused(self) -> None:
+        first = self.engine.ask("Which geotextile tensile strength standard applies?")
+        engine = StandardsRagEngine(
+            self.store,
+            answer_rewriter=lambda *_args, **_kwargs: "ASTM D5887 measures permeability [1].",
+        )
+        self.assertIsNone(
+            engine.rewrite_for_level("Which applies?", first.answer, first.citations, "beginner")
+        )
+
+    def test_refusals_carry_no_level(self) -> None:
+        response = self.engine.ask("What is the capital of France?")
+        self.assertIsNone(response.level)
 
 
 class TranscriptTests(unittest.TestCase):

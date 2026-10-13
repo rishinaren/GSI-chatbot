@@ -65,6 +65,16 @@ CITATION_AUDIT = """
 Quick check before you finish:
 - Each [n] should still attach to the same claim as in the draft.
 - Adjust wording only if the cited draft meaning stays the same.
+- Put each [n] right after the sentence it supports, not at the end of the paragraph.
+  Begin every paragraph and every bullet with a sourced sentence that carries its marker,
+  including the opening answer sentence. Any sentence that names a standard needs a marker.
+- Plain-language explanation may follow a sourced sentence in the same paragraph without a
+  marker, as long as it adds no new facts, numbers, requirements, uses or standard names.
+- Do not add a closing summary paragraph ("In summary", "Overall"); end on the last
+  sourced point.
+- Do not add sentences about how important, crucial or essential something is, about
+  typical applications, about results being "accurate and reliable", or about how a
+  standard is developed or reviewed, unless an excerpt says so.
 """
 
 MATH_AND_FORMAT_RULES = """
@@ -109,12 +119,20 @@ def sanitize_math_markdown(text: str) -> str:
     text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"$$ {m.group(1).strip()} $$", text, flags=re.S)
     fixed: list[str] = []
     in_code = False
+    in_display = False
     for line in text.split("\n"):
         stripped = line.strip()
         if stripped.startswith("```"):
             in_code = not in_code
             fixed.append(line)
-        elif in_code or not stripped or stripped.startswith("$$"):
+        elif not in_code and stripped == "$$":
+            # A bare "$$" opens or closes a display block; the lines between are
+            # already math and must not be wrapped again ("$$\n$$ x $$\n$$").
+            in_display = not in_display
+            fixed.append(line)
+        elif in_display and stripped.startswith("$$") and stripped.endswith("$$"):
+            fixed.append(stripped.strip("$").strip())
+        elif in_code or in_display or not stripped or stripped.startswith("$$"):
             fixed.append(line)
         elif _is_bare_equation_line(stripped):
             body = re.sub(r"\s+", " ", stripped.replace("$", " ")).strip()
@@ -153,22 +171,107 @@ published standard or clearly labeled design guidance from the library.
 """
 
 
+ANSWER_LEVELS = ("beginner", "intermediate", "advanced")
+DEFAULT_ANSWER_LEVEL = "intermediate"
+
+
+def normalize_answer_level(value: object) -> str | None:
+    """The level name if ``value`` is one, else None."""
+    level = str(value or "").strip().lower()
+    return level if level in ANSWER_LEVELS else None
+
+
+# How deep to go, by who is reading. The three readers want the same facts and the
+# same citations; what changes is how much is explained and how much is assumed.
+# Advanced is deliberately "more depth, not harder words" - a specialist wants the
+# conditions and limits spelled out, not the prose made denser.
+ANSWER_LEVEL_RULES = {
+    "beginner": """
+Reader level: BEGINNER - someone new to geosynthetics (a student, a contractor or owner's
+representative, or an engineer from another field).
+- Open with one or two plain sentences that answer the question directly, keeping the key
+  words of the excerpt (the property, the material, the test) so the source stays traceable.
+- If the question is about a property or test, say in everyday words what that property is
+  before describing how it is tested.
+- Explain each technical term right after it is used, in a few everyday words, and keep the
+  term itself so the reader learns it (for example "permittivity, which is how easily water
+  passes through the fabric"). Do not leave any jargon or abbreviation unexplained.
+- If the excerpts say what the result is used for, say that plainly. Do not invent uses,
+  project examples or consequences the excerpts do not state.
+- Leave out equations, specimen dimensions, rates, pressures, unit conversions and
+  clause-level detail. If one number is central to the answer, give it and say in words what
+  it means.
+- When comparing standards, say in one sentence what they share, then what is different
+  about each, in plain words.
+- About 100 to 160 words, in two or three short paragraphs. No tables, no headings, no
+  bullet lists.
+""",
+    "intermediate": """
+Reader level: INTERMEDIATE - a practicing engineer or technician who knows the basics of
+geosynthetics. Use standard terminology and briefly explain less common terms. Give the key
+detail that answers the question (what is measured, how, and the main conditions or limits
+the evidence states) without walking through every clause.
+""",
+    "advanced": """
+Reader level: ADVANCED - a specialist such as a design engineer, lab manager or
+specification writer. Advanced means more depth and precision, not harder words: write
+plain, direct sentences with no buzzwords, filler or textbook background.
+- Lead with a one- or two-sentence precise answer.
+- Then give the specifics the excerpts support, one fact per bullet with a short bold label,
+  each bullet ending with its marker. Look for test conditions, specimen size and
+  conditioning, rates, equations (with each variable defined), values and tolerances,
+  units, what must be reported, precision and bias, and stated limitations or exclusions.
+- Include only the items the excerpts actually give and skip the rest without comment.
+  Never say a detail is "implied", and do not infer what a standard omits.
+- Do not define basic terms. Use a short table only to compare values across standards.
+- About 200 to 400 words, depending on how much the excerpts support.
+""",
+}
+
+# Last in the prompt, where a small model weighs it most. These phrases add no facts
+# and were the bulk of what made answers read as padded.
+PLAIN_WORDS_RULE = """
+Never use the words "crucial", "essential", "comprehensive" or "robust", and never say a
+method "ensures accurate and reliable results". State the fact and stop.
+"""
+
+REPHRASE_RULES = """
+This answer was already given to the user at another reader level. The draft holds that
+answer followed by the full text of the excerpts it cites. Write a new answer to the same
+question for the reader level below. Do not contradict the answer already given, but do not
+copy its structure either: restructure freely. A beginner version should be shorter and
+simpler and drop detail; an advanced version should add specifics from the excerpt text,
+each attached to the matching [n] marker. Copy any equation exactly as it appears in the
+answer already given; never rearrange or re-derive one. Do not mention that this is a
+rewrite or name the reader level.
+"""
+
+
 def build_rewriter_system_prompt(
     *,
     include_comparison_schema: bool,
     attachment_names: list[str] | None = None,
     include_design_guidance: bool = False,
+    level: str = DEFAULT_ANSWER_LEVEL,
+    rephrase: bool = False,
 ) -> str:
     source_description = (
         "standards and non-normative engineering design guidance"
         if include_design_guidance
         else "standards documents"
     )
+    level = normalize_answer_level(level) or DEFAULT_ANSWER_LEVEL
+    reader = {
+        "beginner": "someone new to geosynthetics",
+        "intermediate": "an engineer",
+        "advanced": "a specialist",
+    }[level]
     parts = [
         "You are a knowledgeable technical assistant for geosynthetics.\n",
         f"The draft below is a list of raw excerpts retrieved from {source_description}. "
-        "Rewrite it into a clear, conversational explanation that an engineer can read and "
-        "understand, as if you are teaching the concept.\n",
+        f"Rewrite it into a clear, conversational explanation that {reader} can read and "
+        "understand, as if you are teaching the concept. Write for the reader level given "
+        "at the end of these instructions.\n",
         "Explain what the retrieved evidence means in your own words; do NOT just repeat the "
         "excerpts verbatim. Synthesize the points into coherent prose and short paragraphs.\n",
         "Stay strictly grounded: only state facts, numbers, and conclusions that the retrieved "
@@ -177,7 +280,9 @@ def build_rewriter_system_prompt(
         REWRITER_GROUNDING.strip(),
         "\n\n",
     ]
-    if include_comparison_schema:
+    # The five-part comparison layout is too much for a newcomer; the beginner rules
+    # carry their own one-line way to compare.
+    if include_comparison_schema and level != "beginner":
         parts.append(COMPARISON_ANSWER_SCHEMA.strip())
         parts.append("\n\n")
     if include_design_guidance:
@@ -205,6 +310,10 @@ def build_rewriter_system_prompt(
         "- Never mention the rewrite process (for example, do not say 'Here is a clearer version "
         "of your draft').\n"
     )
+    if rephrase:
+        parts.append("\n" + REPHRASE_RULES.strip() + "\n")
+    parts.append("\n" + ANSWER_LEVEL_RULES[level].strip())
+    parts.append("\n\n" + PLAIN_WORDS_RULE.strip())
     return "".join(parts)
 
 

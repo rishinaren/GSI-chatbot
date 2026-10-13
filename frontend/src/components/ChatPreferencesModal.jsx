@@ -1,4 +1,6 @@
 import { useEffect, useId, useState } from "react";
+import { DEFAULT_ANSWER_LEVEL } from "../answerLevels";
+import AnswerLevelSlider from "./AnswerLevelSlider";
 
 const OPTIONS = [
   { value: "testing", label: "Testing with standards", icon: "testing" },
@@ -30,9 +32,16 @@ function FocusIcon({ name }) {
   );
 }
 
-export default function ChatPreferencesModal({ initialFocus, onboarding, onSave, onClose }) {
+export default function ChatPreferencesModal({
+  initialFocus,
+  initialLevel,
+  onboarding,
+  onSave,
+  onClose,
+}) {
   const titleId = useId();
   const [focus, setFocus] = useState(initialFocus || "both");
+  const [level, setLevel] = useState(initialLevel || DEFAULT_ANSWER_LEVEL);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -40,13 +49,17 @@ export default function ChatPreferencesModal({ initialFocus, onboarding, onSave,
     setFocus(initialFocus || "both");
   }, [initialFocus]);
 
+  useEffect(() => {
+    setLevel(initialLevel || DEFAULT_ANSWER_LEVEL);
+  }, [initialLevel]);
+
   async function handleSubmit(event) {
     event.preventDefault();
     if (saving) return;
     setSaving(true);
     setError("");
     try {
-      await onSave(focus);
+      await onSave({ focus, level });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Could not save your preference.");
     } finally {
@@ -101,6 +114,8 @@ export default function ChatPreferencesModal({ initialFocus, onboarding, onSave,
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>
           {selectedLabel} selected.
         </p>
+
+        <AnswerLevelSlider value={level} onChange={setLevel} />
 
         {error ? <p className="preference-error" role="alert">{error}</p> : null}
         <div className="preference-actions">

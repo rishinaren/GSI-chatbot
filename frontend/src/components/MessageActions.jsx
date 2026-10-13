@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { submitFeedback } from "../api";
+import { ANSWER_LEVELS, answerLevel } from "../answerLevels";
 import { saveReportPdf } from "../reportPdf";
 
 // What you can do with an answer once you have read it. The row is invisible
@@ -64,6 +65,38 @@ function ReportIcon() {
   );
 }
 
+// Three rising bars, as many lit as the level is deep.
+function LevelBars({ lit }) {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+      {[
+        { x: 4, y: 14, h: 6 },
+        { x: 10.5, y: 9.5, h: 10.5 },
+        { x: 17, y: 5, h: 15 },
+      ].map((bar, index) => (
+        <rect
+          key={bar.x}
+          x={bar.x}
+          y={bar.y}
+          width="3.6"
+          height={bar.h}
+          rx="1.2"
+          fill="currentColor"
+          opacity={index < lit ? 1 : 0.28}
+        />
+      ))}
+    </svg>
+  );
+}
+
+function ChevronIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
 function ConversationIcon() {
   return (
     <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -107,11 +140,20 @@ export default function MessageActions({
   conversationId,
   onRetry,
   canRetry,
+  level,
+  canChangeLevel,
+  levelPending,
+  levelError,
+  onChangeLevel,
 }) {
   const wrapRef = useRef(null);
   const reportPickerId = useId();
+  const levelPickerId = useId();
   const [copied, setCopied] = useState(false);
   const [reportPickerOpen, setReportPickerOpen] = useState(false);
+  const [levelPickerOpen, setLevelPickerOpen] = useState(false);
+  const currentLevel = answerLevel(level);
+  const pendingLevel = levelPending ? answerLevel(levelPending) : null;
   const [reportState, setReportState] = useState("idle");
   const [rating, setRating] = useState("");
   const [ticket, setTicket] = useState(null);
@@ -122,16 +164,18 @@ export default function MessageActions({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!reportPickerOpen) return undefined;
+    if (!reportPickerOpen && !levelPickerOpen) return undefined;
 
     const closeOnOutsideClick = (event) => {
       if (!wrapRef.current?.contains(event.target)) {
         setReportPickerOpen(false);
+        setLevelPickerOpen(false);
       }
     };
     const closeOnEscape = (event) => {
       if (event.key === "Escape") {
         setReportPickerOpen(false);
+        setLevelPickerOpen(false);
       }
     };
     document.addEventListener("pointerdown", closeOnOutsideClick);
@@ -140,7 +184,14 @@ export default function MessageActions({
       document.removeEventListener("pointerdown", closeOnOutsideClick);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [reportPickerOpen]);
+  }, [reportPickerOpen, levelPickerOpen]);
+
+  function chooseLevel(next) {
+    setLevelPickerOpen(false);
+    if (next !== currentLevel.value) {
+      onChangeLevel?.(next);
+    }
+  }
 
   async function handleCopy() {
     const ok = await copyText(answer ?? "");
@@ -264,11 +315,32 @@ export default function MessageActions({
             <RetryIcon />
           </button>
         ) : null}
+        {canChangeLevel ? (
+          <button
+            type="button"
+            className="msg-action msg-report-action msg-level-action"
+            onClick={() => {
+              setError("");
+              setReportPickerOpen(false);
+              setLevelPickerOpen((open) => !open);
+            }}
+            disabled={Boolean(levelPending)}
+            aria-expanded={levelPickerOpen}
+            aria-controls={levelPickerId}
+            aria-label={`Answer level: ${currentLevel.label}. Change level`}
+            title="Change answer level"
+          >
+            <LevelBars lit={ANSWER_LEVELS.indexOf(currentLevel) + 1} />
+            <span>{currentLevel.label}</span>
+            <ChevronIcon />
+          </button>
+        ) : null}
         <button
           type="button"
           className={`msg-action msg-report-action ${reportState === "saved" ? "on" : ""}`}
           onClick={() => {
             setError("");
+            setLevelPickerOpen(false);
             setReportPickerOpen((open) => !open);
           }}
           disabled={reportState === "saving"}
@@ -281,6 +353,42 @@ export default function MessageActions({
           <span>{reportState === "saving" ? "Preparing…" : reportState === "saved" ? "Saved" : "Export PDF"}</span>
         </button>
       </div>
+
+      {pendingLevel ? (
+        <p className="level-status" role="status">
+          <span className="attach-spinner" aria-hidden="true" />
+          Rewriting at {pendingLevel.label} level…
+        </p>
+      ) : null}
+
+      {levelPickerOpen ? (
+        <div
+          className="report-scope-picker level-picker"
+          id={levelPickerId}
+          role="group"
+          aria-label="Rewrite this answer at another level"
+        >
+          {ANSWER_LEVELS.map((option, index) => {
+            const isCurrent = option.value === currentLevel.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={`report-scope-option ${isCurrent ? "current" : ""}`}
+                onClick={() => chooseLevel(option.value)}
+                aria-current={isCurrent ? "true" : undefined}
+              >
+                <span className="report-scope-icon"><LevelBars lit={index + 1} /></span>
+                <span>
+                  <strong>{option.label}</strong>
+                  <small>{isCurrent ? "Showing now" : option.hint}</small>
+                </span>
+                {isCurrent ? <span className="level-picker-check"><TickIcon /></span> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       {reportPickerOpen ? (
         <div
@@ -350,7 +458,7 @@ export default function MessageActions({
       ) : null}
 
       {thanks ? <p className="feedback-thanks">Thanks - we have passed that on.</p> : null}
-      {error ? <p className="feedback-error">{error}</p> : null}
+      {error || levelError ? <p className="feedback-error">{error || levelError}</p> : null}
     </div>
   );
 }

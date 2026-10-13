@@ -771,6 +771,172 @@ input {
   font-size: 0.8rem;
 }
 
+/* Answer level: one track, three stops. The native range input sits on top,
+   transparent except for its thumb, so dragging, arrows and screen readers all
+   work; the track, fill and dots behind it only show where it is. */
+.level-field {
+  --thumb: 30px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.level-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.level-field-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.level-field-value {
+  color: var(--accent-hover);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.level-slider {
+  position: relative;
+  height: var(--thumb);
+}
+
+.level-track {
+  position: absolute;
+  inset: 3px 0;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* Runs from the left edge to just past the thumb's centre. */
+.level-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--level-pos) + var(--thumb) / 2);
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.18s ease;
+}
+
+.level-stop {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--stop-pos));
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.level-stop.passed {
+  background: rgba(21, 32, 13, 0.55);
+}
+
+.level-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.level-range:focus {
+  outline: none;
+}
+
+.level-range::-webkit-slider-runnable-track {
+  height: var(--thumb);
+  background: transparent;
+}
+
+.level-range::-moz-range-track {
+  height: var(--thumb);
+  background: transparent;
+}
+
+.level-range::-webkit-slider-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border: none;
+  border-radius: 50%;
+  background: #f4f4f2;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  cursor: grab;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: transform 0.12s ease;
+}
+
+.level-range::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border: none;
+  border-radius: 50%;
+  background: #f4f4f2;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  cursor: grab;
+}
+
+.level-range:active::-webkit-slider-thumb {
+  transform: scale(0.94);
+  cursor: grabbing;
+}
+
+.level-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent);
+}
+
+.level-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent);
+}
+
+.level-ticks {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 8px;
+}
+
+.level-ticks button {
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 550;
+  transition: color 0.12s ease;
+}
+
+.level-ticks button:first-child {
+  text-align: left;
+}
+
+.level-ticks button:last-child {
+  text-align: right;
+}
+
+.level-ticks button:hover,
+.level-ticks button.on {
+  color: var(--text);
+}
+
+.level-hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 .preference-actions {
   display: flex;
   align-items: center;
@@ -3484,6 +3650,56 @@ input {
   opacity: 0.65;
 }
 
+.msg-level-action svg:last-child {
+  margin-left: -1px;
+  opacity: 0.7;
+}
+
+/* An answer being rewritten for another level stays readable but recedes. */
+.markdown-body {
+  transition: opacity 0.2s ease;
+}
+
+.markdown-body.rewriting {
+  opacity: 0.4;
+}
+
+.level-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.level-status .attach-spinner {
+  width: 13px;
+  height: 13px;
+  border-width: 1.6px;
+}
+
+/* A short vertical list, so each level's one-line description fits in full. */
+.report-scope-picker.level-picker {
+  grid-template-columns: 1fr;
+  width: min(330px, 100%);
+}
+
+.level-picker .report-scope-option small {
+  white-space: normal;
+}
+
+.report-scope-option.current {
+  background: var(--accent-soft);
+  cursor: default;
+}
+
+.level-picker-check {
+  margin-left: auto;
+  color: var(--accent-hover);
+  display: inline-flex;
+}
+
 .report-scope-picker {
   position: absolute;
   z-index: 20;
@@ -3543,7 +3759,7 @@ input {
   color: var(--accent-hover);
 }
 
-.report-scope-option > span:last-child {
+.report-scope-option > span:nth-child(2) {
   min-width: 0;
   display: flex;
   flex-direction: column;

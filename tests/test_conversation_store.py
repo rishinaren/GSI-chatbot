@@ -7,7 +7,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from standards_rag.auth import auth_public_config, load_auth_config_from_env
-from standards_rag.conversation_store import InMemoryConversationStore, UserPreferences
+from standards_rag.conversation_store import (
+    InMemoryConversationStore,
+    StoredMessage,
+    UserPreferences,
+)
 from standards_rag.ingestion import chunk_pages, load_document_from_text
 from standards_rag.retrieval import InMemoryStandardsStore, rerank_results_for_citation
 
@@ -62,6 +66,48 @@ class ConversationStoreTests(unittest.TestCase):
         self.assertEqual(restored.user_id, "user-1")
         self.assertEqual(restored.focus, "design")
         self.assertTrue(restored.to_public_dict()["onboarding_complete"])
+
+    def test_answer_level_defaults_and_updates_without_touching_focus(self) -> None:
+        store = InMemoryConversationStore()
+        saved = store.set_user_preferences("user-1", "design")
+        self.assertEqual(saved.level, "intermediate")
+
+        updated = store.set_user_preferences("user-1", level="beginner")
+        self.assertEqual(updated.focus, "design")
+        self.assertEqual(updated.level, "beginner")
+        restored = UserPreferences.from_item(updated.to_item())
+        self.assertEqual(restored.level, "beginner")
+        self.assertEqual(
+            UserPreferences.from_item({"user_id": "u", "focus": "both"}).level, "intermediate"
+        )
+
+    def test_switching_an_answer_level_keeps_every_version(self) -> None:
+        store = InMemoryConversationStore()
+        record = store.create_conversation("user-1")
+        store.append_turn(
+            "user-1",
+            record.conversation_id,
+            question="What does D4595 measure?",
+            answer="Original. [1]",
+            citations=[{"chunk_id": "c1"}],
+            level="intermediate",
+        )
+        store.set_answer_level(
+            "user-1", record.conversation_id, 1, level="beginner", text="Simple. [1]"
+        )
+        message = store.get_conversation("user-1", record.conversation_id).messages[1]
+        self.assertEqual(message.text, "Simple. [1]")
+        self.assertEqual(message.level, "beginner")
+        self.assertEqual(
+            message.versions, {"intermediate": "Original. [1]", "beginner": "Simple. [1]"}
+        )
+        self.assertIsNone(
+            store.set_answer_level(
+                "user-1", record.conversation_id, 0, level="beginner", text="x"
+            )
+        )
+        restored = StoredMessage.from_dict(message.to_dict())
+        self.assertEqual(restored.versions, message.versions)
 
 
 class IngestionMetadataTests(unittest.TestCase):

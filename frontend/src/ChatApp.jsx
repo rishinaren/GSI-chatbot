@@ -12,6 +12,7 @@ import MessageActions from "./components/MessageActions";
 import {
   ApiError,
   assignConversationToProject,
+  changeAnswerLevel,
   createConversation,
   createProject,
   deleteConversation,
@@ -29,6 +30,7 @@ import {
   withAuthedFileUrl,
 } from "./api";
 import { clearSession, getUserEmail, isAuthenticated, signOut } from "./auth";
+import { DEFAULT_ANSWER_LEVEL, answerLevel } from "./answerLevels";
 
 const PAREN_NOT_AFTER_LATEX_OPENER = "(?<!\\\\(?:left|bigl|Bigl|biggl|Biggl|mleft))";
 
@@ -107,6 +109,7 @@ function messagesFromConversation(record) {
     // Names only: the file itself was never kept, so a reopened chat shows what
     // was asked about without pretending the document is still readable.
     attachments: message.attachments ?? [],
+    level: message.level ?? null,
   }));
 }
 
@@ -190,6 +193,7 @@ function ChatApp() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [chatFocus, setChatFocus] = useState("");
+  const [chatLevel, setChatLevel] = useState(DEFAULT_ANSWER_LEVEL);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
 
@@ -245,6 +249,7 @@ function ChatApp() {
   async function refreshPreferences() {
     const data = await getChatPreferences();
     setChatFocus(data.focus || "");
+    setChatLevel(data.level || DEFAULT_ANSWER_LEVEL);
     setPreferencesReady(true);
   }
 
@@ -270,9 +275,10 @@ function ChatApp() {
     }
   }
 
-  async function saveChatFocus(focus) {
-    const saved = await updateChatPreferences(focus);
+  async function saveChatPreferences({ focus, level }) {
+    const saved = await updateChatPreferences({ focus, level });
     setChatFocus(saved.focus);
+    setChatLevel(saved.level || DEFAULT_ANSWER_LEVEL);
     setPreferencesReady(true);
     setPreferencesOpen(false);
   }
@@ -425,7 +431,7 @@ function ChatApp() {
     return record.conversation_id;
   }
 
-  async function sendQuestion(text, { attach = attachments } = {}) {
+  async function sendQuestion(text, { attach = attachments, level = null } = {}) {
     const trimmed = text.trim();
     if (!trimmed) return;
 
@@ -455,6 +461,9 @@ function ChatApp() {
         conversation_id: conversationId,
         unit_preference: unitPreference || null,
         attachment_ids: ready.map((item) => item.attachmentId),
+        // Only set when re-asking an answer that was moved to another level;
+        // otherwise the server uses the saved preference.
+        ...(level ? { level } : {}),
       });
       setMessages((current) => [
         ...current,
@@ -466,6 +475,7 @@ function ChatApp() {
           videos: data.videos ?? [],
           videoSuggestions: data.video_suggestions ?? [],
           needsClarification: data.needs_clarification,
+          level: data.level ?? null,
         },
       ]);
       setFollowUpSuggestions(data.follow_up_suggestions ?? []);
@@ -505,9 +515,44 @@ function ChatApp() {
             name: candidate.attachments?.[position]?.file_name ?? "Attachment",
             pageCount: candidate.attachments?.[position]?.page_count,
           })),
+          level: messages[index]?.level ?? null,
         });
         return;
       }
+    }
+  }
+
+  function updateMessage(messageId, changes) {
+    setMessages((current) =>
+      current.map((message) => (message.id === messageId ? { ...message, ...changes } : message)),
+    );
+  }
+
+  // Rewrites this answer in place for another reader, from the same sources.
+  // Every level it has been written at is kept on the server, so switching back
+  // is instant.
+  async function changeLevel(messageId, level) {
+    const message = messages.find((item) => item.id === messageId);
+    if (!message || !activeConversationId || message.levelPending) return;
+    updateMessage(messageId, { levelPending: level, levelError: "" });
+    try {
+      const data = await changeAnswerLevel({
+        conversationId: activeConversationId,
+        answer: message.text,
+        level,
+      });
+      updateMessage(messageId, {
+        text: data.answer,
+        level: data.level,
+        citations: data.citations ?? message.citations,
+        levelPending: null,
+      });
+    } catch (levelError) {
+      updateMessage(messageId, {
+        levelPending: null,
+        levelError:
+          levelError instanceof Error ? levelError.message : "We could not rewrite that answer.",
+      });
     }
   }
 
@@ -602,6 +647,7 @@ function ChatApp() {
             composerProps={composerProps}
             conversationId={activeConversationId}
             onRetry={retryFrom}
+            onChangeLevel={changeLevel}
           />
         ) : (
           <EmptyState error={error} composerProps={composerProps} />
@@ -612,8 +658,9 @@ function ChatApp() {
       {authed && preferencesReady && (!chatFocus || preferencesOpen) ? (
         <ChatPreferencesModal
           initialFocus={chatFocus}
+          initialLevel={chatLevel}
           onboarding={!chatFocus}
-          onSave={saveChatFocus}
+          onSave={saveChatPreferences}
           onClose={() => setPreferencesOpen(false)}
         />
       ) : null}
@@ -645,6 +692,7 @@ function ChatThread({
   composerProps,
   conversationId,
   onRetry,
+  onChangeLevel,
 }) {
   const conversationExchanges = reportExchangesFromMessages(messages);
 
@@ -656,7 +704,10 @@ function ChatThread({
             <div key={message.id} className={`msg-row ${message.role}`}>
               <div className={`bubble ${message.role === "user" ? "user" : "bot"}`}>
                 {message.role === "assistant" ? (
-                  <div className="markdown-body">
+                  <div
+                    className={`markdown-body ${message.levelPending ? "rewriting" : ""}`}
+                    aria-busy={Boolean(message.levelPending)}
+                  >
                     <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
                       {normalizeAssistantContent(message.text)}
                     </ReactMarkdown>
@@ -761,6 +812,12 @@ function ChatThread({
                     conversationId={conversationId}
                     canRetry={!isLoading}
                     onRetry={() => onRetry(index)}
+                    // Answers saved before levels existed were written at the default.
+                    level={answerLevel(message.level || DEFAULT_ANSWER_LEVEL).value}
+                    canChangeLevel={(message.citations?.length ?? 0) > 0 && Boolean(conversationId)}
+                    levelPending={message.levelPending}
+                    levelError={message.levelError}
+                    onChangeLevel={(level) => onChangeLevel(message.id, level)}
                   />
                 ) : null}
               </div>

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from standards_rag.answer_prompts import (
+    DEFAULT_ANSWER_LEVEL,
     build_rewriter_system_prompt,
     build_title_system_prompt,
     is_comparison_question,
@@ -83,6 +84,8 @@ def build_openai_answer_rewriter_from_env() -> "Callable[..., str] | None":
         citations: list[Citation],
         *,
         attachments: list[str] | None = None,
+        level: str = DEFAULT_ANSWER_LEVEL,
+        rephrase: bool = False,
     ) -> str:
         citation_lines = []
         for index, citation in enumerate(citations, start=1):
@@ -95,6 +98,8 @@ def build_openai_answer_rewriter_from_env() -> "Callable[..., str] | None":
             include_design_guidance=any(
                 citation.source_kind == "design_guidance" for citation in citations
             ),
+            level=level,
+            rephrase=rephrase,
         )
 
         user = (

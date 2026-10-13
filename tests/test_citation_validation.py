@@ -127,3 +127,63 @@ def _fake_citation(*, chunk_id: str = "cid", standard_id: str = "D5321-26") -> C
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LevelRewriteRepairTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from standards_rag.models import Citation, SourceChunk
+
+        self.citations = [
+            Citation(
+                document_id="gri-gm13",
+                standard_id="GRI-GM13",
+                title="Test Methods and Properties for HDPE Geomembranes",
+                chunk_id="k1",
+            )
+        ]
+        self.chunks = {
+            "k1": SourceChunk(
+                chunk_id="k1",
+                document_id="gri-gm13",
+                text="Carbon black content shall be 2.0 to 3.0 percent for HDPE geomembranes.",
+            )
+        }
+
+    def test_a_supported_unmarked_sentence_gets_its_marker(self) -> None:
+        from standards_rag.citation_validation import attach_missing_markers
+
+        fixed = attach_missing_markers(
+            "GRI GM13 requires carbon black content of 2.0 to 3.0 percent for HDPE geomembranes. "
+            "That keeps the sheet dark.",
+            self.citations,
+            self.chunks,
+        )
+        self.assertIn("geomembranes. [1] That keeps", fixed)
+
+    def test_an_unsupported_sentence_gains_no_marker(self) -> None:
+        from standards_rag.citation_validation import attach_missing_markers
+
+        text = "GRI GM13 was written by a committee that meets every spring in Philadelphia."
+        self.assertEqual(attach_missing_markers(text, self.citations, self.chunks), text)
+
+    def test_a_bullet_with_an_unsupported_marker_is_removed(self) -> None:
+        from standards_rag.citation_validation import drop_unsupported_sentences
+
+        trimmed = drop_unsupported_sentences(
+            "- **Content**: GRI GM13 requires carbon black of 2.0 to 3.0 percent for HDPE "
+            "geomembranes [1].\n- **Why**: It improves weathering durability over decades [1].",
+            self.citations,
+            self.chunks,
+        )
+        self.assertIn("2.0 to 3.0 percent", trimmed)
+        self.assertNotIn("Why", trimmed)
+
+
+class MathSanitizerTests(unittest.TestCase):
+    def test_a_display_block_is_not_wrapped_twice(self) -> None:
+        from standards_rag.answer_prompts import sanitize_math_markdown
+
+        fixed = sanitize_math_markdown("$$\nθ = \\frac{Q L}{W H}\n$$")
+        self.assertEqual(fixed, "$$\nθ = \\frac{Q L}{W H}\n$$")
+        nested = sanitize_math_markdown("$$\n$$ θ = \\frac{Q L}{W H} $$\n$$")
+        self.assertEqual(nested, "$$\nθ = \\frac{Q L}{W H}\n$$")

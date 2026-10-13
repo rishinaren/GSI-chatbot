@@ -20,6 +20,9 @@ ANCHOR_STOP = frozenset(
 
 # Match citation marker preceded by whitespace (draft format: ... claim [n])
 CITE_MARKER = re.compile(r"(\s*)\[(\d{1,2})\](?!\d)")
+# Where a sentence ends: terminal punctuation followed by a space or the line end
+# (so "2.5 kN/m" is not split).
+SENTENCE_END_RE = re.compile(r"[.!?]+(?=\s|$)")
 COMPACT_SID_RE = re.compile(r"[^a-z0-9]+")
 NEGATIVE_ASSERTION_RE = re.compile(
     r"\b(?:does|do|is|are|can|may|will|shall)\s+not\b|"
@@ -183,6 +186,94 @@ def uncited_standard_claims(answer: str) -> list[str]:
         if _standard_mentions(paragraph) and len(_meaningful_claim_tokens(paragraph)) >= 3:
             issues.append(paragraph)
     return issues
+
+
+def attach_missing_markers(
+    answer: str,
+    citations: list[Citation],
+    chunks: dict[str, SourceChunk],
+) -> str:
+    """Give an unmarked line that names a standard the marker of its supporting excerpt.
+
+    Writers often open with "ASTM D4595 measures ..." and put no marker on it,
+    which ``uncited_standard_claims`` rightly refuses. The marker is added only
+    when an excerpt from that same standard passes ``citation_supports_claim`` -
+    the check a hand-placed marker must pass - so nothing gains a source it
+    would not have earned. Lines that remain unsupported are left for the
+    caller's checks to refuse.
+    """
+    lines = answer.split("\n")
+    for position, line in enumerate(lines):
+        text = line.rstrip()
+        if not text.strip() or text.endswith(":") or CITE_MARKER.search(text):
+            continue
+        if not _standard_mentions(text) or len(_meaningful_claim_tokens(text)) < 3:
+            continue
+        # The marker goes after the first sentence naming the standard, so the claim
+        # it has to support is that sentence (and any before it), not the paragraph.
+        ends = [match.end() for match in SENTENCE_END_RE.finditer(text)]
+        if not ends or ends[-1] < len(text):
+            ends.append(len(text))
+        start = 0
+        for end in ends:
+            named = _standard_mentions(text[start:end])
+            if not named:
+                start = end
+                continue
+            claim = text[:end].strip().lstrip("#-* ").strip()
+            for index, citation in enumerate(citations, start=1):
+                if named & _standard_lookup_keys(citation.standard_id) and citation_supports_claim(
+                    claim, citation, chunks.get(citation.chunk_id)
+                ):
+                    lines[position] = f"{text[:end].rstrip()} [{index}]{text[end:]}"
+                    break
+            break
+    return "\n".join(lines)
+
+
+def drop_unsupported_sentences(
+    answer: str,
+    citations: list[Citation],
+    chunks: dict[str, SourceChunk],
+) -> str:
+    """Remove each sentence whose marker its excerpt does not support.
+
+    Stripping only the marker would leave the claim standing, uncited; the
+    sentence is what was not supported, so it goes. A bullet or paragraph left
+    with nothing but a label is removed too. The caller re-runs every check on
+    what remains, so this can only narrow an answer, never add to it.
+    """
+    for _ in range(len(citations) * 4 + 4):
+        bad = None
+        for marker in CITE_MARKER.finditer(answer):
+            index = int(marker.group(2))
+            claim = _claim_line_before_marker(answer, marker.start())
+            chunk = chunks.get(citations[index - 1].chunk_id) if 1 <= index <= len(citations) else None
+            if not 1 <= index <= len(citations) or not citation_supports_claim(
+                claim, citations[index - 1], chunk
+            ):
+                bad = marker
+                break
+        if bad is None:
+            break
+        line_start = answer.rfind("\n", 0, bad.start()) + 1
+        before = answer[line_start : bad.start()]
+        # Start of the sentence this marker closes: after the last sentence end
+        # that is not the punctuation sitting right against the marker.
+        ends = [m.end() for m in SENTENCE_END_RE.finditer(before.rstrip(" .!?"))]
+        cut = line_start + (ends[-1] if ends else 0)
+        tail = answer[bad.end() :]
+        tail = tail[1:] if tail.startswith(".") else tail
+        answer = answer[:cut].rstrip(" ") + (" " if ends else "") + tail.lstrip(" ")
+    kept: list[str] = []
+    for line in answer.split("\n"):
+        bare = re.sub(r"[*_#>\-\s:]+", "", line)
+        if line.strip() and not bare:
+            continue
+        if re.fullmatch(r"\s*[-*]\s+\*\*[^*]+\*\*:?\s*", line):
+            continue
+        kept.append(line.rstrip())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
 
 
 def validate_answer_citations(

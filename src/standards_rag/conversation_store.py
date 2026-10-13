@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from standards_rag.answer_prompts import DEFAULT_ANSWER_LEVEL
+
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
@@ -25,6 +27,10 @@ class StoredMessage:
     # is never stored - this exists so a reopened chat still shows what was asked
     # about, not so the file can be read again.
     attachments: list[dict[str, Any]] = field(default_factory=list)
+    # Assistant answers only: the reader level ``text`` is written for, and every
+    # level it has been written at, so switching back is instant and costs nothing.
+    level: str | None = None
+    versions: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -37,7 +43,16 @@ class StoredMessage:
             citations=list(data.get("citations", [])),
             created_at=str(data.get("created_at") or _utc_now_iso()),
             attachments=list(data.get("attachments", [])),
+            level=data.get("level"),
+            versions={str(k): str(v) for k, v in (data.get("versions") or {}).items()},
         )
+
+    def switch_level(self, level: str, text: str, *, default_level: str) -> None:
+        """Show ``text`` as the ``level`` version, keeping the one it replaces."""
+        self.versions.setdefault(self.level or default_level, self.text)
+        self.versions[level] = text
+        self.text = text
+        self.level = level
 
 
 @dataclass
@@ -142,12 +157,15 @@ class ProjectRecord:
 class UserPreferences:
     user_id: str
     focus: str
+    # How much an answer explains: beginner, intermediate or advanced.
+    level: str = DEFAULT_ANSWER_LEVEL
     created_at: str = field(default_factory=_utc_now_iso)
     updated_at: str = field(default_factory=_utc_now_iso)
 
     def to_public_dict(self) -> dict[str, object]:
         return {
             "focus": self.focus,
+            "level": self.level,
             "onboarding_complete": True,
             "updated_at": self.updated_at,
         }
@@ -158,6 +176,7 @@ class UserPreferences:
             "conversation_id": PREFERENCES_SORT_KEY,
             "record_type": "preferences",
             "focus": self.focus,
+            "level": self.level,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -167,9 +186,17 @@ class UserPreferences:
         return cls(
             user_id=str(data["user_id"]),
             focus=str(data.get("focus") or "testing"),
+            level=str(data.get("level") or DEFAULT_ANSWER_LEVEL),
             created_at=str(data.get("created_at") or _utc_now_iso()),
             updated_at=str(data.get("updated_at") or _utc_now_iso()),
         )
+
+    def update(self, *, focus: str | None, level: str | None) -> None:
+        if focus:
+            self.focus = focus
+        if level:
+            self.level = level
+        self.updated_at = _utc_now_iso()
 
 
 class ConversationStore(ABC):
@@ -204,7 +231,15 @@ class ConversationStore(ABC):
         unit_preference: str | None = None,
         title_generator: Callable[[str, str], str] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        level: str | None = None,
     ) -> ConversationRecord:
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_answer_level(
+        self, user_id: str, conversation_id: str, index: int, *, level: str, text: str
+    ) -> ConversationRecord | None:
+        """Make ``text`` the shown version of the answer at ``index``."""
         raise NotImplementedError
 
     @abstractmethod
@@ -244,7 +279,9 @@ class ConversationStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def set_user_preferences(self, user_id: str, focus: str) -> UserPreferences:
+    def set_user_preferences(
+        self, user_id: str, focus: str | None = None, *, level: str | None = None
+    ) -> UserPreferences:
         raise NotImplementedError
 
 
@@ -291,6 +328,7 @@ class InMemoryConversationStore(ConversationStore):
         unit_preference: str | None = None,
         title_generator: Callable[[str, str], str] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        level: str | None = None,
     ) -> ConversationRecord:
         record = self.get_conversation(user_id, conversation_id)
         if record is None:
@@ -305,12 +343,26 @@ class InMemoryConversationStore(ConversationStore):
         record.messages.append(
             StoredMessage(role="user", text=question, attachments=list(attachments or []))
         )
-        record.messages.append(StoredMessage(role="assistant", text=answer, citations=citations))
+        record.messages.append(
+            StoredMessage(role="assistant", text=answer, citations=citations, level=level)
+        )
         record.updated_at = _utc_now_iso()
         if unit_preference:
             record.unit_preference = unit_preference
         if record.title == "New chat" and is_first_turn:
             record.title = _resolve_title(question, answer, title_generator)
+        return record
+
+    def set_answer_level(
+        self, user_id: str, conversation_id: str, index: int, *, level: str, text: str
+    ) -> ConversationRecord | None:
+        record = self.get_conversation(user_id, conversation_id)
+        if record is None or not 0 <= index < len(record.messages):
+            return None
+        message = record.messages[index]
+        if message.role != "assistant":
+            return None
+        message.switch_level(level, text, default_level=DEFAULT_ANSWER_LEVEL)
         return record
 
     def set_pinned(
@@ -370,14 +422,17 @@ class InMemoryConversationStore(ConversationStore):
     def get_user_preferences(self, user_id: str) -> UserPreferences | None:
         return self._preferences.get(user_id)
 
-    def set_user_preferences(self, user_id: str, focus: str) -> UserPreferences:
+    def set_user_preferences(
+        self, user_id: str, focus: str | None = None, *, level: str | None = None
+    ) -> UserPreferences:
         current = self._preferences.get(user_id)
         if current is None:
-            current = UserPreferences(user_id=user_id, focus=focus)
+            current = UserPreferences(
+                user_id=user_id, focus=focus or "both", level=level or DEFAULT_ANSWER_LEVEL
+            )
             self._preferences[user_id] = current
         else:
-            current.focus = focus
-            current.updated_at = _utc_now_iso()
+            current.update(focus=focus, level=level)
         return current
 
 
@@ -445,6 +500,7 @@ class DynamoDBConversationStore(ConversationStore):
         unit_preference: str | None = None,
         title_generator: Callable[[str, str], str] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        level: str | None = None,
     ) -> ConversationRecord:
         record = self.get_conversation(user_id, conversation_id)
         if record is None:
@@ -457,7 +513,9 @@ class DynamoDBConversationStore(ConversationStore):
         record.messages.append(
             StoredMessage(role="user", text=question, attachments=list(attachments or []))
         )
-        record.messages.append(StoredMessage(role="assistant", text=answer, citations=citations))
+        record.messages.append(
+            StoredMessage(role="assistant", text=answer, citations=citations, level=level)
+        )
         record.updated_at = _utc_now_iso()
         if unit_preference:
             record.unit_preference = unit_preference
@@ -473,6 +531,19 @@ class DynamoDBConversationStore(ConversationStore):
         if record is None:
             return None
         record.pinned = pinned
+        self._table.put_item(Item=record.to_dict())
+        return record
+
+    def set_answer_level(
+        self, user_id: str, conversation_id: str, index: int, *, level: str, text: str
+    ) -> ConversationRecord | None:
+        record = self.get_conversation(user_id, conversation_id)
+        if record is None or not 0 <= index < len(record.messages):
+            return None
+        message = record.messages[index]
+        if message.role != "assistant":
+            return None
+        message.switch_level(level, text, default_level=DEFAULT_ANSWER_LEVEL)
         self._table.put_item(Item=record.to_dict())
         return record
 
@@ -556,13 +627,16 @@ class DynamoDBConversationStore(ConversationStore):
         item = response.get("Item")
         return UserPreferences.from_item(item) if item else None
 
-    def set_user_preferences(self, user_id: str, focus: str) -> UserPreferences:
+    def set_user_preferences(
+        self, user_id: str, focus: str | None = None, *, level: str | None = None
+    ) -> UserPreferences:
         current = self.get_user_preferences(user_id)
         if current is None:
-            current = UserPreferences(user_id=user_id, focus=focus)
+            current = UserPreferences(
+                user_id=user_id, focus=focus or "both", level=level or DEFAULT_ANSWER_LEVEL
+            )
         else:
-            current.focus = focus
-            current.updated_at = _utc_now_iso()
+            current.update(focus=focus, level=level)
         self._table.put_item(Item=current.to_item())
         return current
 
