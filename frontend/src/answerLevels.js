@@ -1,9 +1,10 @@
 // How much an answer explains. The same sources back every level; what moves is
-// how much is explained and how much detail is given.
+// how much is explained and how much detail is given. The values are the names the
+// API and saved chats use, so they stay put when the labels change.
 export const ANSWER_LEVELS = [
-  { value: "beginner", label: "Beginner", hint: "Plain language. Terms explained as they come up." },
-  { value: "intermediate", label: "Intermediate", hint: "The key details, for working engineers." },
-  { value: "advanced", label: "Advanced", hint: "Full specifics: conditions, equations, limits." },
+  { value: "beginner", label: "Succinct", hint: "A brief summary of the key points." },
+  { value: "intermediate", label: "Balanced", hint: "Key information with relevant context and explanations." },
+  { value: "advanced", label: "Detailed", hint: "In-depth explanations with technical details." },
 ];
 
 export const DEFAULT_ANSWER_LEVEL = "intermediate";

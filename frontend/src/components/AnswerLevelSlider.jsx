@@ -12,7 +12,7 @@ export default function AnswerLevelSlider({ value, onChange }) {
   return (
     <div className="level-field">
       <div className="level-field-head">
-        <span className="level-field-label" id={labelId}>Answer level</span>
+        <span className="level-field-label" id={labelId}>How much detail would you like in your answers?</span>
         <span className="level-field-value" aria-live="polite">{current.label}</span>
       </div>
 
