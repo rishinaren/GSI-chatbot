@@ -746,8 +746,8 @@ class StandardsRagEngine:
         if not self.answer_rewriter or not citations or not answer.strip():
             return None
         level = normalize_answer_level(level) or DEFAULT_ANSWER_LEVEL
-        # A newcomer needs less of each excerpt; handing over all of it pulls the
-        # writer back into the detail the beginner version should leave out.
+        # A succinct answer needs less of each excerpt; handing over all of it pulls
+        # the writer back into the detail that version should leave out.
         excerpt_chars = {"beginner": 500, "intermediate": 1000, "advanced": 1600}[level]
         draft = (
             "Answer already given (each [n] marker is checked against its excerpt):\n"

@@ -277,6 +277,15 @@ class StandardsRagTests(unittest.TestCase):
         self.assertIn("non-normative", prompt)
         self.assertIn("A standard controls", prompt)
 
+    def test_succinct_prompt_summarizes_instead_of_teaching(self) -> None:
+        # Succinct is stored as "beginner": shorter for any reader, not simpler.
+        prompt = build_rewriter_system_prompt(include_comparison_schema=True, level="beginner")
+        self.assertIn("SUCCINCT", prompt)
+        self.assertIn("Do not stop to define or explain", prompt)
+        self.assertNotIn("teaching the concept", prompt)
+        balanced = build_rewriter_system_prompt(include_comparison_schema=True)
+        self.assertIn("teaching the concept", balanced)
+
     def test_follow_up_uses_conversation_context_and_converts_units(self) -> None:
         self.engine.ask("What does D7762-18 say about fly ash stabilization?", conversation_id="demo")
         response = self.engine.ask(

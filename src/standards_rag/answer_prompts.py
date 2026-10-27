@@ -181,29 +181,33 @@ def normalize_answer_level(value: object) -> str | None:
     return level if level in ANSWER_LEVELS else None
 
 
-# How deep to go, by who is reading. The three readers want the same facts and the
-# same citations; what changes is how much is explained and how much is assumed.
-# Advanced is deliberately "more depth, not harder words" - a specialist wants the
-# conditions and limits spelled out, not the prose made denser.
+# How much to say. Every level gets the same facts and the same citations; what changes
+# is how much of them the answer carries. The UI calls the levels Succinct, Balanced and
+# Detailed; the stored names predate those labels. Succinct is shorter, not simpler: any
+# reader can pick it, so it keeps the standard's own terms and drops all but the key
+# points. Advanced is deliberately "more depth, not harder words" - a specialist wants
+# the conditions and limits spelled out, not the prose made denser.
 ANSWER_LEVEL_RULES = {
     "beginner": """
-Reader level: BEGINNER - someone new to geosynthetics (a student, a contractor or owner's
-representative, or an engineer from another field).
-- Open with one or two plain sentences that answer the question directly, keeping the key
-  words of the excerpt (the property, the material, the test) so the source stays traceable.
-- If the question is about a property or test, say in everyday words what that property is
-  before describing how it is tested.
-- Explain each technical term right after it is used, in a few everyday words, and keep the
-  term itself so the reader learns it (for example "permittivity, which is how easily water
-  passes through the fabric"). Do not leave any jargon or abbreviation unexplained.
-- If the excerpts say what the result is used for, say that plainly. Do not invent uses,
-  project examples or consequences the excerpts do not state.
-- Leave out equations, specimen dimensions, rates, pressures, unit conversions and
-  clause-level detail. If one number is central to the answer, give it and say in words what
-  it means.
-- When comparing standards, say in one sentence what they share, then what is different
-  about each, in plain words.
-- About 100 to 160 words, in two or three short paragraphs. No tables, no headings, no
+Reader level: SUCCINCT - any reader, from a newcomer to a specialist, who wants only the
+key points.
+- Open with one or two sentences that answer the question directly, keeping the key words
+  of the excerpt (the property, the material, the test) so the source stays traceable.
+- Then add only the one to three points that matter most for this question, such as what
+  is measured or required and the main condition or limit the excerpts state. Leave out
+  background, procedure steps and anything the question did not ask about.
+- Use the standard's own terms as they are. Do not stop to define or explain them, and do
+  not swap them for everyday words.
+- Write no equation, formula or math symbol, even when the excerpts give one: no $ or $$
+  math at all. Say in words what is calculated instead. Leave out specimen dimensions,
+  rates, pressures, unit conversions and clause-level detail. Give a number only when it
+  is the answer or central to it, with its unit.
+- When comparing standards, give each one a sentence, then one sentence on the key
+  difference.
+- Every sentence must state a fact from the excerpts and end with its marker. Stop when
+  the key points are made; do not close with a sentence on why the result matters or
+  where it is used.
+- About 50 to 100 words, in one or two short paragraphs. No tables, no headings, no
   bullet lists.
 """,
     "intermediate": """
@@ -239,8 +243,8 @@ REPHRASE_RULES = """
 This answer was already given to the user at another reader level. The draft holds that
 answer followed by the full text of the excerpts it cites. Write a new answer to the same
 question for the reader level below. Do not contradict the answer already given, but do not
-copy its structure either: restructure freely. A beginner version should be shorter and
-simpler and drop detail; an advanced version should add specifics from the excerpt text,
+copy its structure either: restructure freely. A succinct version should be shorter and
+keep only the key points; an advanced version should add specifics from the excerpt text,
 each attached to the matching [n] marker. Copy any equation exactly as it appears in the
 answer already given; never rearrange or re-derive one. Do not mention that this is a
 rewrite or name the reader level.
@@ -261,17 +265,22 @@ def build_rewriter_system_prompt(
         else "standards documents"
     )
     level = normalize_answer_level(level) or DEFAULT_ANSWER_LEVEL
-    reader = {
-        "beginner": "someone new to geosynthetics",
-        "intermediate": "an engineer",
-        "advanced": "a specialist",
-    }[level]
+    # Succinct summarizes for any reader; the other two levels explain.
+    if level == "beginner":
+        task = (
+            "Rewrite it into a short, clear summary of the key points that any reader can "
+            "take in quickly."
+        )
+    else:
+        reader = {"intermediate": "an engineer", "advanced": "a specialist"}[level]
+        task = (
+            f"Rewrite it into a clear, conversational explanation that {reader} can read and "
+            "understand, as if you are teaching the concept."
+        )
     parts = [
         "You are a knowledgeable technical assistant for geosynthetics.\n",
         f"The draft below is a list of raw excerpts retrieved from {source_description}. "
-        f"Rewrite it into a clear, conversational explanation that {reader} can read and "
-        "understand, as if you are teaching the concept. Write for the reader level given "
-        "at the end of these instructions.\n",
+        f"{task} Write for the reader level given at the end of these instructions.\n",
         "Explain what the retrieved evidence means in your own words; do NOT just repeat the "
         "excerpts verbatim. Synthesize the points into coherent prose and short paragraphs.\n",
         "Stay strictly grounded: only state facts, numbers, and conclusions that the retrieved "
@@ -280,8 +289,8 @@ def build_rewriter_system_prompt(
         REWRITER_GROUNDING.strip(),
         "\n\n",
     ]
-    # The five-part comparison layout is too much for a newcomer; the beginner rules
-    # carry their own one-line way to compare.
+    # The five-part comparison layout is too long for a succinct answer; its rules
+    # carry their own short way to compare.
     if include_comparison_schema and level != "beginner":
         parts.append(COMPARISON_ANSWER_SCHEMA.strip())
         parts.append("\n\n")
